@@ -20,10 +20,12 @@ async def test_bbox_with_params():
         print(f"📡 Sent: {buffer_cmd}")
         await asyncio.sleep(0.1)
         
-        # Step 2: BBOX with tenant and channel_prefix (use exact coordinates from website)
-        bbox_cmd = "BBOX 799506 -6924 4013052 3452222 5 tenant=sbm channel_prefix=schematic"
+        # Step 2: BBOX with tenant but WITHOUT schematic (try to get real geographic coordinates)
+        # Try with Munich area in EPSG:3857 (Web Mercator)
+        bbox_cmd = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
         await ws.send(bbox_cmd)
         print(f"📡 Sent: {bbox_cmd}")
+        print(f"   (Using Web Mercator coordinates for Munich area)")
         print(f"\nWaiting for responses...\n")
         
         trains_found = {}
@@ -105,6 +107,19 @@ async def test_bbox_with_params():
                                                                 print(f"      🗺️  https://www.google.com/maps?q={lat},{lon}")
                                                             except Exception as e:
                                                                 print(f"      📍 Raw coords: {coords}")
+                                                        elif geom_type == 'LineString' and coords and len(coords) > 0:
+                                                            # LineString - show start and end points converted to lat/lon
+                                                            print(f"      📏 Route segment ({len(coords)} points)")
+                                                            if len(coords[0]) >= 2:
+                                                                try:
+                                                                    start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
+                                                                    print(f"      📍 Start: {start_lat:.6f}°N, {start_lon:.6f}°E")
+                                                                    if len(coords) > 1 and coords[0] != coords[-1]:
+                                                                        end_lon, end_lat = transformer.transform(coords[-1][0], coords[-1][1])
+                                                                        print(f"      🏁 End: {end_lat:.6f}°N, {end_lon:.6f}°E")
+                                                                        print(f"      🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
+                                                                except Exception as e:
+                                                                    print(f"      Raw coords: {coords[:2]}")
                                                         elif coords:
                                                             print(f"      Geometry: {geom_type}, coords: {coords[:2] if len(coords) > 2 else coords}")
                                                     
