@@ -1,1 +1,3 @@
-mvg-api
+mvg>=1.6.0
+websockets>=12.0
+flask>=3.0.0
