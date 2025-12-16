@@ -1,204 +1,189 @@
 import asyncio
 import json
-import os
-import signal
-from datetime import datetime, timezone
-
 import websockets
+from pyproj import Transformer
+from datetime import datetime
 
 WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
-FASANENPARK_UIC = "8001963"
 
+# Initialize the coordinate transformer
+transformer = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
 
-def format_departure_time(timestamp_ms: int) -> str:
-    """Convert Unix timestamp (milliseconds) to human-readable time."""
-    dt = datetime.fromtimestamp(timestamp_ms / 1000)
-    return dt.strftime('%H:%M')
-
-
-def parse_departure(data: dict) -> dict:
-    """Extract relevant departure information from geops API response."""
-    return {
-        'train_number': data.get('train_number', 'N/A'),
-        'destination': data.get('to', ['Unknown'])[0] if data.get('to') else 'Unknown',
-        'scheduled_time': format_departure_time(data.get('ris_aimed_time', 0)),
-        'estimated_time': format_departure_time(data.get('ris_estimated_time') or data.get('time', 0)),
-        'delay_seconds': ((data.get('ris_estimated_time') or data.get('time', 0)) - data.get('ris_aimed_time', 0)) // 1000 if data.get('ris_estimated_time') else 0,
-        'has_realtime': data.get('has_fzo', False),
-    }
-
-
-async def get_departures(url: str, station_uic: str, max_departures: int = 10):
-    """Fetch real-time departures from geops API.
-    
-    Args:
-        url: WebSocket URL
-        station_uic: Station UIC code (e.g., '8001963' for Fasanenpark)
-        max_departures: Maximum number of departures to display
-    """
-    departures = []
-    
-    async with websockets.connect(url, max_size=10 * 1024 * 1024) as ws:
-        print(f"\n🚂 Connecting to geops real-time API...")
-        
-        # Request timetable for the station
-        command = f"GET timetable_{station_uic}"
-        await ws.send(command)
-        print(f"📡 Requesting departures for station UIC {station_uic}\n")
-
-        try:
-            async for msg in ws:
-                if isinstance(msg, str):
-                    try:
-                        data = json.loads(msg)
-                        
-                        # Check if this is a timetable response
-                        if data.get('source', '').startswith('timetable_'):
-                            content = data.get('content', {})
-                            departure = parse_departure(content)
-                            departures.append(departure)
-                            
-                            # Display the departure
-                            delay_info = ""
-                            if departure['delay_seconds'] > 0:
-                                delay_info = f" ⚠️  +{departure['delay_seconds'] // 60} min"
-                            elif departure['delay_seconds'] < 0:
-                                delay_info = f" ✓ {departure['delay_seconds'] // 60} min early"
-                            
-                            realtime_indicator = "🟢" if departure['has_realtime'] else "⚪"
-                            
-                            print(f"{realtime_indicator} Train {departure['train_number']:5} → {departure['destination']:20} | "
-                                  f"Scheduled: {departure['scheduled_time']} | "
-                                  f"Estimated: {departure['estimated_time']}{delay_info}")
-                            
-                            # Stop after collecting enough departures
-                            if len(departures) >= max_departures:
-                                print(f"\n✅ Displayed {max_departures} departures")
-                                break
-                                
-                    except json.JSONDecodeError:
-                        pass  # Skip non-JSON messages
-                        
-        except websockets.ConnectionClosedOK:
-            print("\n✅ Connection closed normally")
-        except websockets.ConnectionClosedError as e:
-            print(f"\n❌ Connection error: {e}")
-    
-    return departures
-
-
-async def track_next_train(url: str, station_uic: str):
-    """Track the next incoming S-Bahn to a station using trajectory data.
-    
-    Demonstrates the two-step process:
-    1. Get next departure from timetable (to get train_id)
-    2. Request trajectory for that specific train_id
-    """
-    
-    async with websockets.connect(url, max_size=10 * 1024 * 1024) as ws:
-        print(f"\n🚂 Connecting to geops real-time API...")
-        
-        # Step 1: Get timetable and find trains with real-time tracking
-        print("\n📋 Step 1: Getting timetable to find trains with GPS tracking...")
-        timetable_command = f"GET timetable_{station_uic}"
-        await ws.send(timetable_command)
-        
-        trains_with_tracking = []
-        message_count = 0
-        
-        async for msg in ws:
-            if isinstance(msg, str):
-                try:
-                    data = json.loads(msg)
-                    
-                    if data.get('source', '').startswith('timetable_'):
-                        content = data.get('content', {})
-                        if content.get('has_fzo'):  # Has real-time tracking
-                            train_info = {
-                                'id': content.get('train_id'),
-                                'number': content.get('train_number'),
-                                'destination': content.get('to', ['Unknown'])[0] if content.get('to') else 'Unknown',
-                                'departure_time': format_departure_time(content.get('time'))
-                            }
-                            trains_with_tracking.append(train_info)
-                        
-                        message_count += 1
-                        if message_count >= 3:
-                            break
-                except json.JSONDecodeError:
-                    pass
-        
-        print(f"✅ Found {len(trains_with_tracking)} trains with GPS tracking")
-        
-        if not trains_with_tracking:
-            print("❌ No trains with active GPS found")
-            return
-        
-        # Display train details
-        print("\n📋 Trains with GPS tracking:")
-        for train in trains_with_tracking:
-            print(f"  • {train['number']} → {train['destination']:20} @ {train['departure_time']} (ID: {train['id']})")
-        
-        # Step 2: Subscribe to first train with tracking
-        if trains_with_tracking:
-            train = trains_with_tracking[0]
-            print(f"\n📍 Step 2: Subscribing to trajectory of train {train['number']}...")
-            
-            # Use SUB instead of GET to keep connection open for updates
-            trajectory_command = f"SUB full_trajectory_{train['id']}"
-            await ws.send(trajectory_command)
-            print(f"Sent: {trajectory_command}")
-            print("Waiting for trajectory updates (30 seconds)...\n")
-            
-            # Wait for updates
-            try:
-                async with asyncio.timeout(30):  # Wait up to 30 seconds
-                    async for msg in ws:
-                        if isinstance(msg, str):
-                            try:
-                                data = json.loads(msg)
-                                print(f"Received: {data.get('source', 'unknown')}")
-                                
-                                if data.get('source', '').startswith('full_trajectory_'):
-                                    content = data.get('content')
-                                    
-                                    if content is not None:
-                                        print(f"\n✅ GOT TRAJECTORY DATA!")
-                                        print(json.dumps(data, indent=2))
-                                        print("\n" + "=" * 80)
-                                        return
-                                    else:
-                                        print(f"   Content: None\n")
-                                        
-                            except json.JSONDecodeError:
-                                pass
-            except asyncio.TimeoutError:
-                print(f"\n⏱️  Timeout - no trajectory updates received")
-        
-        print("\n❌ No active trajectory data found")
-                        #     content = data.get('content', {})
-                            
-                        #     # Extract position information
-                        #     properties = content.get('properties', {})
-                        #     geometry = content.get('geometry', {})
-                        #     coordinates = geometry.get('coordinates', [])
-                            
-
-
-
-def main():
-    """Main entry point - track the next incoming S-Bahn."""
-    print("=" * 80)
-    print("🚉 Tracking Next S-Bahn to Fasanenpark (Real-time via geops.io)")
-    print("=" * 80)
+async def get_station_uic(ws, station_name):
+    """Get UIC code for a station using an existing WebSocket connection"""
+    res = None
+    command = "GET station"
+    await ws.send(command)
+    print(f"📡 Sent: {command}")
     
     try:
-        asyncio.run(track_next_train(WS_URL, FASANENPARK_UIC))
-    except KeyboardInterrupt:
-        print("\n\n👋 Stopped by user")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
+        async with asyncio.timeout(5):
+            async for msg in ws:
+                data = json.loads(msg)
+                source = data.get('source', '')
+                
+                if source == 'station':
+                    content = data.get('content', None)
+                    properties = content.get('properties', None)
+                    name = properties.get('name', None)
+                    networkLines = properties.get('networkLines', None)
+                    uic = properties.get('uic', None)
+                    if station_name in name and networkLines:
+                        print(f"✅ Found: {name} → UIC: {uic}")
+                        res = uic
+                        break
+    except asyncio.TimeoutError:
+        print("⏱️  Timeout waiting for station data")
+    
+    return res
 
+async def get_incoming_trains(ws, uic):
+    """Get incoming trains for a station using an existing WebSocket connection"""
+    if not uic:
+        print("❌ Could not find station")
+        return
+    
+    # Now get timetable for this station
+    command = f"GET timetable_{uic}"
+    await ws.send(command)
+    print(f"📡 Sent: {command}")
+    
+    trains = []
+    try:
+        async with asyncio.timeout(5):
+            async for msg in ws:
+                data = json.loads(msg)
+                source = data.get('source', '')
+                
+                if source.startswith('timetable_'):
+                    content = data.get('content', {})
+                    train_number = content.get('train_number')
+                    destination = content.get('to', ['Unknown'])[0] if content.get('to') else 'Unknown'
+                    time_ms = content.get('time', 0)
+                    
+                    from datetime import datetime
+                    time_str = datetime.fromtimestamp(time_ms / 1000).strftime('%H:%M')
+                    
+                    trains.append({
+                        'number': train_number,
+                        'destination': destination,
+                        'time': time_str
+                    })
+                    
+                    print(f"🚆 Train {train_number} → {destination} @ {time_str}")
+                    
+                    if len(trains) >= 5:  # Get first 5 trains
+                        break
+    except asyncio.TimeoutError:
+        print("⏱️  Timeout waiting for timetable")
+    
+    return trains
 
+async def get_sbahn(ws, number):
+    buffer_cmd = "BUFFER 100 100"
+    await ws.send(buffer_cmd)
+    print(f"📡 Sent: {buffer_cmd}")
+    await asyncio.sleep(0.1)
+    
+    bbox_cmd = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
+    await ws.send(bbox_cmd)
+    print(f"📡 Sent: {bbox_cmd}")
+    await asyncio.sleep(0.1)
+    
+    trains_found = {}
+    message_count = 0
+    
+    try:
+        async with asyncio.timeout(100):
+            async for message in ws:
+                message_count += 1
+                try:
+                    data = json.loads(message)
+                    source = data.get("source", "")
+                    content = data.get("content")
+                    
+                    if source == "buffer":
+                        for item in content:
+                            try:
+                                if item:
+                                    trajectory = item.get('content')
+                                    process_trajectory(trajectory, number)
+                            except Exception as e:
+                                print(e)
+                    
+                    
+                except json.JSONDecodeError:
+                    print("⚠️  Received non-JSON message")
+                except Exception as e:
+                    print(f"❌ Error processing message: {e}")
+                    
+                if message_count >= 1000:
+                    print(f"="*80)
+                    break
+    except asyncio.TimeoutError:
+        print(f"\n⏱️  Timeout")
+    print(f"\n📨 Received {message_count} messages")
+        
+        
+def process_trajectory(train_data, number) -> bool:
+    """Process individual train data from the buffer response"""
+    # print(json.dumps(train_data, indent=2, ensure_ascii=False))
+    props = train_data.get('properties', {})
+    geom = train_data.get('geometry', {})
+    
+    train_id = props.get('train_id', 'Unknown')
+    train_number = props.get('train_number', 'N/A')
+    line = props.get('line')
+    line_name = line.get('name', 'N/A')
+    
+    state = props.get('state', 'Unknown')
+    delay = props.get('delay')
+    
+    if train_number != number:
+        # print("not the right number")
+        return False
+    
+    print(f"\n🚆 Train {train_number} (Line {line_name})")
+    print(f"   ID: {train_id}")
+    print(f"   State: {state}")
+    if delay is not None:
+        print(f"   Delay: {delay/1000:.0f}s ({delay/60000:.0f}min)")
+    
+    # Extract and convert coordinates
+    geom_type = geom.get('type')
+    coords = geom.get('coordinates', [])
+    
+    if geom_type == 'LineString' and coords and len(coords) > 0:
+        if len(coords[0]) >= 2:
+            try:
+                start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
+                print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
+                print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
+            except Exception as e:
+                print(f"   ⚠️  Coordinate error: {e}")
+    return True
+        
+def pick_train_number_from_list(trains, destinations):
+    for t in trains:
+        if t.get('destination') in destinations:
+            # todo check time
+            return t.get('number')
+    return None
+
+async def main():
+    """Main function that creates one WebSocket connection and reuses it"""
+    async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
+        print("🔌 Connected to WebSocket\n")
+        
+        uic = await get_station_uic(ws, station_name="Fasanenpark")
+        trains = await get_incoming_trains(ws, uic)
+        
+        print(trains)
+        train_number = pick_train_number_from_list(trains, "Mammendorf")
+        
+        await get_sbahn(ws, train_number)
+        
+        print("Done")
+        
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
