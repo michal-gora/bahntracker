@@ -1,6 +1,7 @@
 import asyncio
 import json
 import websockets
+import traceback
 from pyproj import Transformer
 from datetime import datetime
 
@@ -37,7 +38,7 @@ async def get_station_uic(ws, station_name):
     
     return res
 
-async def get_incoming_trains(ws, uic):
+async def get_incoming_trains(ws, uic, max_trains=100):
     """Get incoming trains for a station using an existing WebSocket connection"""
     if not uic:
         print("❌ Could not find station")
@@ -67,15 +68,19 @@ async def get_incoming_trains(ws, uic):
                     trains.append({
                         'number': train_number,
                         'destination': destination,
-                        'time': time_str
+                        'time': time_str,
+                        'timestamp': time_ms
                     })
                     
                     print(f"🚆 Train {train_number} → {destination} @ {time_str}")
                     
-                    if len(trains) >= 5:  # Get first 5 trains
+                    if len(trains) >= max_trains:  # Get first 5 trains
                         break
     except asyncio.TimeoutError:
         print("⏱️  Timeout waiting for timetable")
+    
+    # Sort trains by departure time
+    trains.sort(key=lambda t: t['timestamp'])
     
     return trains
 
@@ -94,96 +99,128 @@ async def get_sbahn(ws, number):
     message_count = 0
     
     try:
-        async with asyncio.timeout(100):
-            async for message in ws:
-                message_count += 1
-                try:
-                    data = json.loads(message)
-                    source = data.get("source", "")
-                    content = data.get("content")
-                    
-                    if source == "buffer":
-                        for item in content:
-                            try:
-                                if item:
-                                    trajectory = item.get('content')
-                                    process_trajectory(trajectory, number)
-                            except Exception as e:
-                                print(e)
-                    
-                    
-                except json.JSONDecodeError:
-                    print("⚠️  Received non-JSON message")
-                except Exception as e:
-                    print(f"❌ Error processing message: {e}")
-                    
-                if message_count >= 1000:
-                    print(f"="*80)
-                    break
-    except asyncio.TimeoutError:
-        print(f"\n⏱️  Timeout")
+        async for message in ws:
+            message_count += 1
+            try:
+                data = json.loads(message)
+                source = data.get("source", "")
+                content = data.get("content")
+                
+                if source == "buffer":
+                    for item in content:
+                        if item:
+                            trajectory = item.get('content')
+                            process_trajectory(trajectory, number)
+                
+                
+            except json.JSONDecodeError:
+                print("⚠️  Received non-JSON message")
+            except Exception as e:
+                print(f"❌ Error processing message: {e}")
+                
+            if message_count >= 1000:
+                print(f"="*80)
+                break
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
     print(f"\n📨 Received {message_count} messages")
         
         
 def process_trajectory(train_data, number) -> bool:
     """Process individual train data from the buffer response"""
     # print(json.dumps(train_data, indent=2, ensure_ascii=False))
-    props = train_data.get('properties', {})
-    geom = train_data.get('geometry', {})
-    
-    train_id = props.get('train_id', 'Unknown')
-    train_number = props.get('train_number', 'N/A')
-    line = props.get('line')
-    line_name = line.get('name', 'N/A')
-    
-    state = props.get('state', 'Unknown')
-    delay = props.get('delay')
-    
-    if train_number != number:
-        # print("not the right number")
-        return False
-    
-    print(f"\n🚆 Train {train_number} (Line {line_name})")
-    print(f"   ID: {train_id}")
-    print(f"   State: {state}")
-    if delay is not None:
-        print(f"   Delay: {delay/1000:.0f}s ({delay/60000:.0f}min)")
-    
-    # Extract and convert coordinates
-    geom_type = geom.get('type')
-    coords = geom.get('coordinates', [])
-    
-    if geom_type == 'LineString' and coords and len(coords) > 0:
-        if len(coords[0]) >= 2:
-            try:
-                start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
-                print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
-                print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
-            except Exception as e:
-                print(f"   ⚠️  Coordinate error: {e}")
-    return True
+    try:
+        if not isinstance(train_data, dict):
+            return False
+        props = train_data.get('properties', {})
+        geom = train_data.get('geometry', {})
         
+        train_id = props.get('train_id', 'Unknown')
+        train_number = props.get('train_number', 'N/A')
+        line = props.get('line')
+        line_name = line.get('name', 'N/A') if isinstance(line, dict) else 'N/A'
+        # if line:
+        #     pass
+        # else:
+        #     print(f"Line is {line}")
+        #     print(json.dumps(props, indent=2, ensure_ascii=False))
+
+        
+        state = props.get('state', 'Unknown')
+        delay = props.get('delay', 'Unknown')
+        
+        if train_number != number:
+            # print("not the right number")
+            return False
+        
+        print(f"\n🚆 Train {train_number} (Line {line_name})")
+        print(f"   ID: {train_id}")
+        print(f"   State: {state}")
+        if delay is not None:
+            print(f"   Delay: {delay/1000:.0f}s ({delay/60000:.0f}min)")
+        
+        # Extract and convert coordinates
+        geom_type = geom.get('type')
+        coords = geom.get('coordinates', [])
+        
+        if geom_type == 'LineString' and coords and len(coords) > 0:
+            if len(coords[0]) >= 2:
+                try:
+                    start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
+                    print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
+                    print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
+                except Exception as e:
+                    print(f"   ⚠️  Coordinate error: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Error processing trajectory: {e}")
+        traceback.print_exc()
+        return False
+    return True
+
 def pick_train_number_from_list(trains, destinations):
     for t in trains:
-        if t.get('destination') in destinations:
+        destination = t.get('destination')
+        if destination and any(dest in destination for dest in destinations):
             # todo check time
             return t.get('number')
     return None
+
+async def keep_alive(ws):
+    """Send PING commands periodically to keep the connection alive"""
+    while True:
+        try:
+            await asyncio.sleep(10)  # Send PING every 10 seconds
+            await ws.send("PING")
+            print("📡 Sent PING")
+        except Exception as e:
+            print(f"⚠️ Keepalive error: {e}")
+            break
 
 async def main():
     """Main function that creates one WebSocket connection and reuses it"""
     async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
         print("🔌 Connected to WebSocket\n")
         
-        uic = await get_station_uic(ws, station_name="Fasanenpark")
-        trains = await get_incoming_trains(ws, uic)
+        # Start keepalive task in the background
+        keepalive_task = asyncio.create_task(keep_alive(ws))
         
-        print(trains)
-        train_number = pick_train_number_from_list(trains, "Mammendorf")
-        
-        await get_sbahn(ws, train_number)
-        
-        print("Done")
+        try:
+            uic = await get_station_uic(ws, station_name="Fasanenpark")
+            trains = await get_incoming_trains(ws, uic)
+            
+            print(json.dumps(trains, indent=2))
+            train_number = pick_train_number_from_list(trains, ["Mammendorf", "Maisach", "Giesing", "Pasing", "Ostbahnhof"])
+            print(f"Chosen train number: {train_number}")
+            await get_sbahn(ws, train_number)
+            
+            print("Done")
+        finally:
+            # Cancel keepalive task when done
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except asyncio.CancelledError:
+                pass
         
 if __name__ == "__main__":
     asyncio.run(main())
