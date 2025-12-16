@@ -25,12 +25,20 @@ async def get_station_uic(ws, station_name):
                 
                 if source == 'station':
                     content = data.get('content', None)
+                    geometry = content.get('geometry', {})
                     properties = content.get('properties', None)
                     name = properties.get('name', None)
                     networkLines = properties.get('networkLines', None)
                     uic = properties.get('uic', None)
+                    coordinates = geometry.get('coordinates', [])  # [x, y] in EPSG:3857
+                    
                     if station_name in name and networkLines:
-                        print(f"✅ Found: {name} → UIC: {uic}")
+                        if coordinates and len(coordinates) >= 2:
+                            lon, lat = transformer.transform(coordinates[0], coordinates[1])
+                            print(f"✅ Found: {name} → UIC: {uic}")
+                            print(f"   📍 Coordinates: {lat:.6f}°N, {lon:.6f}°E")
+                        else:
+                            print(f"✅ Found: {name} → UIC: {uic}")
                         res = uic
                         break
     except asyncio.TimeoutError:
@@ -148,6 +156,8 @@ def process_trajectory(train_data, number) -> bool:
         
         state = props.get('state', 'Unknown')
         delay = props.get('delay', 'Unknown')
+        raw_coordinates = props.get('raw_coordinates')  # [lon, lat] format
+        route_identifier = props.get('route_identifier')  # Contains station UICs
         
         if train_number != number:
             # print("not the right number")
@@ -158,19 +168,28 @@ def process_trajectory(train_data, number) -> bool:
         print(f"   State: {state}")
         if delay is not None:
             print(f"   Delay: {delay/1000:.0f}s ({delay/60000:.0f}min)")
+        if route_identifier:
+            print(f"   📋 Route: {route_identifier}")
         
         # Extract and convert coordinates
-        geom_type = geom.get('type')
-        coords = geom.get('coordinates', [])
-        
-        if geom_type == 'LineString' and coords and len(coords) > 0:
-            if len(coords[0]) >= 2:
-                try:
-                    start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
-                    print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
-                    print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
-                except Exception as e:
-                    print(f"   ⚠️  Coordinate error: {e}")
+        if raw_coordinates and len(raw_coordinates) >= 2:
+            # raw_coordinates is already in [lon, lat] format
+            lon, lat = raw_coordinates[0], raw_coordinates[1]
+            print(f"   📍 Position: {lat:.6f}°N, {lon:.6f}°E")
+            print(f"   🗺️  https://www.google.com/maps?q={lat},{lon}")
+        else:
+            # Fall back to geometry coordinates if raw_coordinates not available
+            geom_type = geom.get('type')
+            coords = geom.get('coordinates', [])
+            
+            if geom_type == 'LineString' and coords and len(coords) > 0:
+                if len(coords[0]) >= 2:
+                    try:
+                        start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
+                        print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
+                        print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
+                    except Exception as e:
+                        print(f"   ⚠️  Coordinate error: {e}")
     except Exception as e:
         print(f"   ⚠️  Error processing trajectory: {e}")
         traceback.print_exc()
