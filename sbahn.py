@@ -10,6 +10,165 @@ WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c
 # Initialize the coordinate transformer
 transformer = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
 
+
+class ModelTrainController:
+    """Placeholder for model train WebSocket control.
+    The model train receives simple commands over WebSocket:
+    - set_speed(speed): 0.0 (stopped) to 1.0 (full speed)
+    - stop(): stop the train (BOARDING at station)
+    - set_station(name): update station name display
+    - set_boarding(active): toggle boarding indicator (e.g. door LEDs)
+    """
+    
+    def set_speed(self, speed: float):
+        """Set model train speed. 0.0 = stopped, 1.0 = full speed"""
+        # TODO: Send speed command via WebSocket to model train
+        pass
+    
+    def stop(self):
+        """Stop the model train at station"""
+        # TODO: Send stop command via WebSocket
+        pass
+    
+    def set_station(self, name: str):
+        """Update the station name display"""
+        # TODO: Send display update via WebSocket
+        pass
+    
+    def set_boarding(self, active: bool):
+        """Toggle boarding indicator (e.g. green door LEDs)"""
+        # TODO: Send LED command via WebSocket
+        pass
+
+
+class TrainTracker:
+    """Tracks a single train's state transitions and segment timing.
+    Only reacts to meaningful changes (state transitions, new segments).
+    """
+    
+    def __init__(self, train_number, controller: ModelTrainController = None):
+        self.train_number = train_number
+        self.controller = controller or ModelTrainController()
+        
+        # State tracking
+        self.state = None           # "DRIVING" or "BOARDING"
+        self.segment_entry = None   # ms timestamp: when current segment started
+        self.segment_exit = None    # ms timestamp: when current segment ends
+        self.station_name = None    # Current/last station name (set during BOARDING)
+        self.coordinates = None     # Latest [lon, lat]
+        self.delay_ms = None        # Latest delay in ms
+        self.line_name = None       # e.g. "S3"
+        self.update_count = 0
+    
+    def update(self, train_data: dict) -> bool:
+        """Process a train update. Returns True if this was our train."""
+        if not isinstance(train_data, dict):
+            return False
+        
+        props = train_data.get('properties', {})
+        train_number = props.get('train_number')
+        
+        if train_number != self.train_number:
+            return False
+        
+        self.update_count += 1
+        
+        # Extract data
+        new_state = props.get('state', 'Unknown')
+        self.delay_ms = props.get('delay')
+        self.coordinates = props.get('raw_coordinates')
+        time_intervals = props.get('time_intervals', [])
+        
+        line = props.get('line')
+        if isinstance(line, dict):
+            self.line_name = line.get('name', 'N/A')
+        
+        # Extract segment timing
+        new_entry = None
+        new_exit = None
+        if time_intervals and len(time_intervals) >= 2:
+            new_entry = time_intervals[0][0]
+            new_exit = time_intervals[1][0]
+        
+        # Detect state change
+        state_changed = new_state != self.state
+        segment_changed = new_entry != self.segment_entry
+        
+        if state_changed:
+            self._on_state_change(new_state, new_entry, new_exit)
+        elif segment_changed and new_entry and new_exit:
+            self._on_new_segment(new_entry, new_exit)
+        
+        # Update stored state
+        self.state = new_state
+        if new_entry:
+            self.segment_entry = new_entry
+        if new_exit:
+            self.segment_exit = new_exit
+        
+        return True
+    
+    def _on_state_change(self, new_state, entry_time, exit_time):
+        """Called when train transitions between DRIVING and BOARDING"""
+        duration = (exit_time - entry_time) / 1000 if entry_time and exit_time else 0
+        now = datetime.now().strftime('%H:%M:%S')
+        segment_info = ""
+        if entry_time and exit_time:
+            entry_str = datetime.fromtimestamp(entry_time / 1000).strftime('%H:%M:%S')
+            exit_str = datetime.fromtimestamp(exit_time / 1000).strftime('%H:%M:%S')
+            segment_info = f"\n   ⏱️  Segment: {entry_str} → {exit_str} ({duration:.0f}s)"
+        
+        if new_state == "BOARDING":
+            pos = self._format_coords()
+            delay_str = f"\n   ⏳ Delay: {self.delay_ms/1000:.0f}s" if self.delay_ms else "\n   ✅ On time"
+            print(f"\n[{now}] 🚉 [{self.line_name}] BOARDING{pos}{segment_info}{delay_str}")
+            
+            # Model train: stop and show boarding
+            self.controller.stop()
+            self.controller.set_boarding(True)
+        
+        elif new_state == "DRIVING":
+            pos = self._format_coords()
+            delay_str = f"\n   ⏳ Delay: {self.delay_ms/1000:.0f}s" if self.delay_ms else "\n   ✅ On time"
+            print(f"\n[{now}] 🚆 [{self.line_name}] DRIVING{pos}{segment_info}{delay_str}")
+            
+            # Model train: calculate speed and go
+            self.controller.set_boarding(False)
+            if duration > 0:
+                speed = self._calculate_model_speed(duration)
+                self.controller.set_speed(speed)
+                print(f"   🎮 Model speed: {speed:.2f}")
+        
+        else:
+            print(f"\n[{now}] ❓ [{self.line_name}] Unknown state: {new_state}")
+    
+    def _on_new_segment(self, entry_time, exit_time):
+        """Called when a new segment starts within the same state (e.g. still DRIVING)"""
+        duration = (exit_time - entry_time) / 1000
+        # Silently update - no need to spam, same state continues
+    
+    def _calculate_model_speed(self, segment_duration_seconds: float) -> float:
+        """Calculate model train speed based on real segment duration.
+        Returns 0.0-1.0 speed value.
+        
+        TODO: Calibrate these values with actual model train:
+        - TRACK_LOOP_SECONDS: how long one loop takes at full speed
+        - MIN_SPEED / MAX_SPEED: hardware limits
+        """
+        TRACK_LOOP_SECONDS_AT_FULL = 10.0  # Calibrate this!
+        MIN_SPEED = 0.1
+        MAX_SPEED = 1.0
+        
+        speed = TRACK_LOOP_SECONDS_AT_FULL / segment_duration_seconds
+        return max(MIN_SPEED, min(MAX_SPEED, speed))
+    
+    def _format_coords(self) -> str:
+        if self.coordinates and len(self.coordinates) >= 2:
+            lon, lat = self.coordinates
+            return f" @ {lat:.4f}°N, {lon:.4f}°E\n   🗺️  https://www.google.com/maps?q={lat},{lon}"
+        return ""
+
+
 async def get_station_uic(ws, station_name):
     """Get UIC code for a station using an existing WebSocket connection"""
     res = None
@@ -92,23 +251,21 @@ async def get_incoming_trains(ws, uic, max_trains=100):
     
     return trains
 
-async def get_sbahn(ws, number):
+async def track_train(ws, number):
+    """Track a specific train using TrainTracker for clean state transitions"""
+    tracker = TrainTracker(number)
+    
     buffer_cmd = "BUFFER 100 100"
     await ws.send(buffer_cmd)
-    print(f"📡 Sent: {buffer_cmd}")
     await asyncio.sleep(0.1)
     
     bbox_cmd = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
     await ws.send(bbox_cmd)
-    print(f"📡 Sent: {bbox_cmd}")
+    print(f"📡 Tracking train {number}...")
     await asyncio.sleep(0.1)
-    
-    trains_found = {}
-    message_count = 0
     
     try:
         async for message in ws:
-            message_count += 1
             try:
                 data = json.loads(message)
                 source = data.get("source", "")
@@ -118,83 +275,22 @@ async def get_sbahn(ws, number):
                     for item in content:
                         if item:
                             trajectory = item.get('content')
-                            process_trajectory(trajectory, number)
-                
+                            tracker.update(trajectory)
                 
             except json.JSONDecodeError:
-                print("⚠️  Received non-JSON message")
+                pass
             except Exception as e:
-                print(f"❌ Error processing message: {e}")
-                
-            if message_count >= 1000:
-                print(f"="*80)
-                break
+                print(f"❌ Error: {e}")
+        
+        # If we reach here, the async iterator ended (connection closed cleanly)
+        print(f"\n⚠️  WebSocket stream ended (connection closed)")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
-    print(f"\n📨 Received {message_count} messages")
-        
-        
-def process_trajectory(train_data, number) -> bool:
-    """Process individual train data from the buffer response"""
-    # print(json.dumps(train_data, indent=2, ensure_ascii=False))
-    try:
-        if not isinstance(train_data, dict):
-            return False
-        props = train_data.get('properties', {})
-        geom = train_data.get('geometry', {})
-        
-        train_id = props.get('train_id', 'Unknown')
-        train_number = props.get('train_number', 'N/A')
-        line = props.get('line')
-        line_name = line.get('name', 'N/A') if isinstance(line, dict) else 'N/A'
-        # if line:
-        #     pass
-        # else:
-        #     print(f"Line is {line}")
-        #     print(json.dumps(props, indent=2, ensure_ascii=False))
-
-        
-        state = props.get('state', 'Unknown')
-        delay = props.get('delay', 'Unknown')
-        raw_coordinates = props.get('raw_coordinates')  # [lon, lat] format
-        route_identifier = props.get('route_identifier')  # Contains station UICs
-        
-        if train_number != number:
-            # print("not the right number")
-            return False
-        
-        print(f"\n🚆 Train {train_number} (Line {line_name})")
-        print(f"   ID: {train_id}")
-        print(f"   State: {state}")
-        if delay is not None:
-            print(f"   Delay: {delay/1000:.0f}s ({delay/60000:.0f}min)")
-        if route_identifier:
-            print(f"   📋 Route: {route_identifier}")
-        
-        # Extract and convert coordinates
-        if raw_coordinates and len(raw_coordinates) >= 2:
-            # raw_coordinates is already in [lon, lat] format
-            lon, lat = raw_coordinates[0], raw_coordinates[1]
-            print(f"   📍 Position: {lat:.6f}°N, {lon:.6f}°E")
-            print(f"   🗺️  https://www.google.com/maps?q={lat},{lon}")
-        else:
-            # Fall back to geometry coordinates if raw_coordinates not available
-            geom_type = geom.get('type')
-            coords = geom.get('coordinates', [])
-            
-            if geom_type == 'LineString' and coords and len(coords) > 0:
-                if len(coords[0]) >= 2:
-                    try:
-                        start_lon, start_lat = transformer.transform(coords[0][0], coords[0][1])
-                        print(f"   📍 Position: {start_lat:.6f}°N, {start_lon:.6f}°E")
-                        print(f"   🗺️  https://www.google.com/maps?q={start_lat},{start_lon}")
-                    except Exception as e:
-                        print(f"   ⚠️  Coordinate error: {e}")
-    except Exception as e:
-        print(f"   ⚠️  Error processing trajectory: {e}")
+        print(f"\n❌ Connection error: {e}")
+        import traceback
         traceback.print_exc()
-        return False
-    return True
+    
+    print(f"\n📊 Tracked {tracker.update_count} updates")
+    return tracker
 
 def pick_train_number_from_list(trains, destinations):
     for t in trains:
@@ -208,9 +304,8 @@ async def keep_alive(ws):
     """Send PING commands periodically to keep the connection alive"""
     while True:
         try:
-            await asyncio.sleep(10)  # Send PING every 10 seconds
+            await asyncio.sleep(7)  # Send PING every 10 seconds
             await ws.send("PING")
-            print("📡 Sent PING")
         except Exception as e:
             print(f"⚠️ Keepalive error: {e}")
             break
@@ -222,15 +317,14 @@ async def main():
         
         # Start keepalive task in the background
         keepalive_task = asyncio.create_task(keep_alive(ws))
-        
         try:
             uic = await get_station_uic(ws, station_name="Fasanenpark")
             trains = await get_incoming_trains(ws, uic)
             
             print(json.dumps(trains, indent=2))
             train_number = pick_train_number_from_list(trains, ["Mammendorf", "Maisach", "Giesing", "Pasing", "Ostbahnhof"])
-            print(f"Chosen train number: {train_number}")
-            await get_sbahn(ws, train_number)
+            print(f"\n🎯 Tracking train {train_number}\n")
+            await track_train(ws, train_number)
             
             print("Done")
         finally:
