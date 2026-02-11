@@ -58,7 +58,9 @@ class TrainTracker:
         self.coordinates = None     # Latest [lon, lat]
         self.delay_ms = None        # Latest delay in ms
         self.line_name = None       # e.g. "S3"
+        self.train_id = None        # e.g. "sbm_140330945117440"
         self.update_count = 0
+        self.verbose = False        # Set to True to see ALL updates
     
     def update(self, train_data: dict) -> bool:
         """Process a train update. Returns True if this was our train."""
@@ -74,6 +76,7 @@ class TrainTracker:
         self.update_count += 1
         
         # Extract data
+        self.train_id = props.get('train_id')
         new_state = props.get('state', 'Unknown')
         self.delay_ms = props.get('delay')
         self.coordinates = props.get('raw_coordinates')
@@ -93,6 +96,21 @@ class TrainTracker:
         # Detect state change
         state_changed = new_state != self.state
         segment_changed = new_entry != self.segment_entry
+        
+        # Verbose logging: log every update
+        if self.verbose:
+            now = datetime.now().strftime('%H:%M:%S')
+            segment_info = ""
+            if new_entry and new_exit:
+                entry_str = datetime.fromtimestamp(new_entry / 1000).strftime('%H:%M:%S')
+                exit_str = datetime.fromtimestamp(new_exit / 1000).strftime('%H:%M:%S')
+                duration = (new_exit - new_entry) / 1000
+                segment_info = f" | Seg: {entry_str}→{exit_str} ({duration:.0f}s)"
+            
+            pos = self._format_coords() if self.coordinates else ""
+            state_marker = "🚉" if new_state == "BOARDING" else "🚆"
+            change_marker = " [NEW]" if (state_changed or segment_changed) else ""
+            print(f"[{now}] {state_marker} [{self.line_name}] {new_state}{pos}{segment_info}{change_marker}")
         
         if state_changed:
             self._on_state_change(new_state, new_entry, new_exit)
@@ -261,6 +279,65 @@ async def track_train(ws, number):
     
     bbox_cmd = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
     await ws.send(bbox_cmd)
+    await asyncio.sleep(0.1)
+    
+    try:
+        async with asyncio.timeout(10):
+            async for message in ws:
+                try:
+                    data = json.loads(message)
+                    source = data.get("source", "")
+                    content = data.get("content")
+                    
+                    if source == "buffer":
+                        for item in content:
+                            if item:
+                                trajectory = item.get('content')
+                                if tracker.update(trajectory) and tracker.train_id:
+                                    # Got train_id, we're done
+                                    return tracker
+                    
+                except json.JSONDecodeError:
+                    pass
+                except Exception as e:
+                    print(f"❌ Error: {e}")
+    except asyncio.TimeoutError:
+        print("⏱️  Timeout getting train_id")
+    
+    return tracker
+
+async def debug_full_trajectory(ws, train_id):
+    """Fetch and display full trajectory to inspect station timing data"""
+    command = f"GET full_trajectory_{train_id}"
+    await ws.send(command)
+    print(f"📡 Sent: {command}\n")
+    
+    try:
+        async with asyncio.timeout(5):
+            async for msg in ws:
+                data = json.loads(msg)
+                source = data.get('source', '')
+                
+                if source == f'full_trajectory_{train_id}':
+                    content = data.get('content', {})
+                    print(json.dumps(content, indent=2, ensure_ascii=False))
+                    return content
+    except asyncio.TimeoutError:
+        print("⏱️  Timeout waiting for trajectory data")
+    
+    return None
+
+async def track_train_continuous(ws, number):
+    """Track a specific train using TrainTracker for clean state transitions"""
+    tracker = TrainTracker(number)
+    tracker.verbose = True  # Enable verbose logging to see ALL updates
+    
+    buffer_cmd = "BUFFER 100 100"
+    await ws.send(buffer_cmd)
+    await asyncio.sleep(0.1)
+    
+    bbox_cmd = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
+    await ws.send(bbox_cmd)
     print(f"📡 Tracking train {number}...")
     await asyncio.sleep(0.1)
     
@@ -323,8 +400,26 @@ async def main():
             
             print(json.dumps(trains, indent=2))
             train_number = pick_train_number_from_list(trains, ["Mammendorf", "Maisach", "Giesing", "Pasing", "Ostbahnhof"])
-            print(f"\n🎯 Tracking train {train_number}\n")
-            await track_train(ws, train_number)
+            print(f"\n🎯 Selected train {train_number}\n")
+            
+            # First, get train_id by tracking briefly
+            print("📡 Getting train_id...")
+            tracker_temp = await track_train(ws, train_number)
+            
+            if tracker_temp.train_id:
+                print(f"\n🔍 Fetching full trajectory for train {tracker_temp.train_id}...\n")
+                trajectory_data = await debug_full_trajectory(ws, tracker_temp.train_id)
+                
+                if trajectory_data:
+                    print("\n" + "="*80)
+                    print("TRAJECTORY DATA RECEIVED")
+                    print("="*80)
+            else:
+                print("❌ Could not get train_id")
+            
+            # Now track continuously with verbose logging
+            print(f"\n📡 Starting continuous tracking (verbose mode)...\n")
+            await track_train_continuous(ws, train_number)
             
             print("Done")
         finally:
