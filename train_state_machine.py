@@ -106,7 +106,15 @@ class TrainStateMachine:
             if api_state == "BOARDING":
                 return State.AT_STATION_VALID
 
-        # No transition for: DRIVING_TO_NONAME (waits for HALL), RUNNING_TO_STATION (waits for HALL)
+        elif s == State.RUNNING_TO_STATION:
+            if api_state == "DRIVING":
+                # Real train departed before we arrived
+                if self._is_fasanenpark():
+                    return State.DRIVING_TO_NONAME
+                else:
+                    return State.DRIVING
+
+        # No transition for: DRIVING_TO_NONAME (waits for HALL)
         return None
 
     def _transition_on_hall(self) -> State | None:
@@ -123,6 +131,8 @@ class TrainStateMachine:
             return State.WAITING_AT_NONAME
 
         elif s == State.RUNNING_TO_STATION:
+            # If HALL triggers while still in RUNNING_TO_STATION, real train must still be boarding
+            # (if it departed, we'd already be in DRIVING state via API transition)
             return State.AT_STATION_VALID
 
         # No transition for: WAITING_AT_NONAME (model parked), AT_STATION_* (model stopped)
