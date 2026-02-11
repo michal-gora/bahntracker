@@ -1,0 +1,73 @@
+{
+  "description": "S3 line travel times from Holzkirchen to Fasanenpark (direction West/Mammendorf)",
+  "direction": "west",
+  "unit": "seconds",
+  "last_updated": "2026-02-11T17:15:00",
+  "source": "Calculated from timetable API (train 6388)",
+  "stations": [
+    {
+      "name": "Holzkirchen",
+      "uic": "8002980",
+      "lat": 47.8761,
+      "lon": 11.7061,
+      "travel_time_to_next": 240,
+      "notes": "Start station"
+    },
+    {
+      "name": "Otterfing",
+      "uic": "8004726",
+      "lat": 47.9072,
+      "lon": 11.6744,
+      "travel_time_to_next": 300,
+      "notes": ""
+    },
+    {
+      "name": "Großhelfendorf",
+      "uic": "8005299",
+      "lat": 47.9367,
+      "lon": 11.6486,
+      "travel_time_to_next": 360,
+      "notes": ""
+    },
+    {
+      "name": "Deisenhofen",
+      "uic": "8001404",
+      "lat": 48.0178,
+      "lon": 11.6117,
+      "travel_time_to_next": 120,
+      "notes": ""
+    },
+    {
+      "name": "Sauerlach",
+      "uic": "8002161",
+      "lat": 47.9728,
+      "lon": 11.6533,
+      "travel_time_to_next": 180,
+      "notes": ""
+    },
+    {
+      "name": "Höllriegelskreuth",
+      "uic": "8005831",
+      "lat": 48.0500,
+      "lon": 11.5183,
+      "travel_time_to_next": 120,
+      "notes": ""
+    },
+    {
+      "name": "Pullach",
+      "uic": "8005991",
+      "lat": 48.0619,
+      "lon": 11.5219,
+      "travel_time_to_next": 120,
+      "notes": ""
+    },
+    {
+      "name": "Fasanenpark",
+      "uic": "8001963",
+      "lat": 48.0797,
+      "lon": 11.6094,
+      "travel_time_to_next": null,
+      "notes": "End station for our model - no travel time to next"
+    }
+  ]
+}
