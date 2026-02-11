@@ -33,13 +33,13 @@ Stored in: `travel_times.json`
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                                                             │
 │  ┌──────────────────┐                                                       │
-│  │ WAITING_AT_NONAME│◀────────────────────────────────────────────────┐     │
+│  │ WAITING_AT_NONAME│◀───────────────────────────────────────────────┐     │
 │  └────────┬─────────┘                                                 │     │
 │           │                                                           │     │
 │           │ (real train BOARDING, find station)                       │     │
 │           ▼                                                           │     │
 │  ┌──────────────────┐                                                 │     │
-│  │ AT_STATION_VALID │◀───────────────────────┐                        │     │
+│  │ AT_STATION_VALID │◀──────────────────────┐                        │     │
 │  │  (validity ON)   │                        │                        │     │
 │  └────────┬─────────┘                        │                        │     │
 │           │                                  │                        │     │
@@ -70,16 +70,16 @@ Stored in: `travel_times.json`
 │           │                        │                                    │   │
 │           │                        │ (real BOARDING)                    │   │
 │           │                        │                                    │   │
-│           └───────────────────────►├◀───────────────────────────────────┘   │
+│           └───────────────────────►├◀──────────────────────────────────┘   │
 │                                    │                                        │
 │                                    │                                        │
 │  ┌──────────────────┐              │                                        │
-│  │RUNNING_TO_STATION│◀─────────────┼────────────────────────────────────┐   │
+│  │RUNNING_TO_STATION│◀────────────┼────────────────────────────────────┐   │
 │  │   (FULL SPEED)   │──────────────┘                                    │   │
 │  └──────────────────┘  (model arrives)                                  │   │
 │           ▲                                                             │   │
 │           │                                                             │   │
-│           │ (while DRIVING, real switches to BOARDING = model late!)   │   │
+│           │ (while DRIVING, real switches to BOARDING = model late!)    │   │
 │           └─────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -130,37 +130,37 @@ Stored in: `travel_times.json`
                           ┌──────────────────────────────────────────────────┐
                           │   Server (Raspberry Pi / Computer)               │
                           │                                                  │
-  ┌─────────────┐        │   ┌────────────────────────────────────────┐     │
-  │ geops.io    │◀───────▶│   │  ONE State Machine (6 states)          │     │
+  ┌─────────────┐         │   ┌────────────────────────────────────────┐     │
+  │ geops.io    │◀──────▶│   │  ONE State Machine (6 states)          │     │
   │ WebSocket   │  input  │   │  All decision logic lives here         │     │
-  └─────────────┘        │   └───────┬──────────────────┬─────────────┘     │
-                          │           │                  │                    │
-                          │     ┌─────┴─────┐      ┌────┴─────┐             │
-                          │     │  Model    │      │ Station  │             │
-                          │     │  output + │      │  output  │             │
-                          │     │  input    │      │  only    │             │
-                          │     └─────┬─────┘      └────┬─────┘             │
+  └─────────────┘         │   └───────┬─────────────────┬──────────────┘     │
+                          │           │                 │                    │
+                          │     ┌─────┴─────┐      ┌────┴─────┐              │
+                          │     │  Model    │      │ Station  │              │
+                          │     │  output + │      │  output  │              │
+                          │     │  input    │      │  only    │              │
+                          │     └─────┬─────┘      └────┬─────┘              │
                           └───────────┼─────────────────┼────────────────────┘
                                       │                 │
                               WiFi/WS │                 │ GPIO or WiFi/WS
                                       │                 │
-                          ┌───────────┴─────┐    ┌─────┴──────────────┐
-                          │  Model Train    │    │  Station Display   │
-                          │  (dumb I/O)     │    │  (dumb I/O)        │
-                          │                 │    │                    │
-                          │  Receives:      │    │  Receives:         │
-                          │  SPEED:0.5      │    │  STATION:name:valid│
+                          ┌───────────┴─────┐    ┌──────┴───────────────┐
+                          │  Model Train    │    │  Station Display     │
+                          │  (dumb I/O)     │    │  (dumb I/O)          │
+                          │                 │    │                      │
+                          │  Receives:      │    │  Receives:           │
+                          │  SPEED:0.5      │    │  STATION:name:valid  │
                           │  STOP           │    │  STATION:name:invalid│
-                          │                 │    │  STATION:clear     │
-                          │  Sends:         │    │                    │
-                          │  HALL           │    │                    │
-                          │                 │    │  Controls:         │
-                          │  Local safety:  │    │  - LCD display     │
-                          │  HALL → stop    │    │  - Validity LED    │
-                          │  motor, then    │    │                    │
-                          │  report to      │    │                    │
-                          │  server         │    │                    │
-                          └─────────────────┘    └────────────────────┘
+                          │                 │    │  STATION:clear       │
+                          │  Sends:         │    │                      │
+                          │  HALL           │    │                      │
+                          │                 │    │  Controls:           │
+                          │  Local safety:  │    │  - LCD display       │
+                          │  HALL → stop    │    │  - Validity LED      │
+                          │  motor, then    │    │                      │
+                          │  report to      │    │                      │
+                          │  server         │    │                      │
+                          └─────────────────┘    └──────────────────────┘
 ```
 
 ### Communication Protocols
