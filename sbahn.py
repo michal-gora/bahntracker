@@ -26,8 +26,12 @@ import websockets
 
 from train_state_machine import TrainStateMachine, State
 from outputs import PrintModelOutput, PrintStationOutput
+from websocket_outputs import WebSocketModelOutput, WebSocketStationOutput, websocket_server_handler
 
 WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
+
+# WebSocket server for model train and station display
+MODEL_SERVER_PORT = 8765
 
 # Destinations we're looking for
 TARGET_DESTINATIONS = ["Mammendorf", "Maisach"]
@@ -251,13 +255,27 @@ async def main():
         print(f"   {i}: {st['name']}{tt_str}")
     print()
 
-    # Create output interfaces (print stubs for now)
-    model = PrintModelOutput()
-    station = PrintStationOutput()
+    # Create output interfaces (WebSocket for model/station)
+    model = WebSocketModelOutput()
+    station = WebSocketStationOutput()
 
     # Create state machine
     sm = TrainStateMachine(model, station, stations)
     print(f"🔧 State machine initialized: {sm.state.name}\n")
+
+    # Start WebSocket server for model train and station display
+    import websockets.server
+    
+    async def ws_handler(websocket, path):
+        await websocket_server_handler(websocket, path, model, station, sm)
+    
+    server = await websockets.server.serve(ws_handler, "0.0.0.0", MODEL_SERVER_PORT)
+    print(f"🌐 WebSocket server listening on 0.0.0.0:{MODEL_SERVER_PORT}")
+    print(f"   Model train should connect to: ws://[server-ip]:{MODEL_SERVER_PORT}")
+    print(f"   Protocol: Send 'HELLO:MODEL', receive 'SPEED:x.xx' or 'STOP', send 'HALL'")
+    print(f"   Station display should connect to: ws://[server-ip]:{MODEL_SERVER_PORT}")
+    print(f"   Protocol: Send 'HELLO:STATION', receive 'STATION:name:valid/invalid/clear'")
+    print()
 
     async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
         print("🔌 Connected to geops.io WebSocket\n")
