@@ -245,11 +245,22 @@ class TrainStateMachine:
         return "noname"
 
     def _calculate_speed(self) -> float:
-        """Calculate model speed from travel_times for the current station segment."""
-        if self.current_station_index is None:
+        """Calculate model speed from travel_times for the current station segment.
+        
+        When driving, current_station_index points to our DESTINATION.
+        We need travel_time from the PREVIOUS station TO our destination.
+        So we use stations[current_station_index - 1]['travel_time_to_next'].
+        """
+        if self.current_station_index is None or self.current_station_index <= 0:
             return self.MIN_SPEED
-        station = self.stations[self.current_station_index]
-        travel_time = station.get('travel_time_to_next')
+        
+        if self.current_station_index >= len(self.stations):
+            return self.MIN_SPEED
+        
+        # Get the previous station's travel_time_to_next (which is the time TO our destination)
+        prev_station = self.stations[self.current_station_index - 1]
+        travel_time = prev_station.get('travel_time_to_next')
+        
         if not travel_time or travel_time <= 0:
             return self.MIN_SPEED
         return self._calculate_speed_for_time(travel_time)
