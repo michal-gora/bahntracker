@@ -17,6 +17,7 @@ led_pin = "P5_3"
 pwm_pin = "P9_7"
 reverser_pin = "P9_6"
 hall_pin = "P9_0"  # TODO: set to your actual HALL sensor pin
+hall_debounce_ms = 500  # ignore repeat triggers within this window
 
 # ============================================================
 # HARDWARE GLOBALS
@@ -27,6 +28,7 @@ pwm = PWM(pwm_pin, freq=1000, duty_u16=0)
 reverser = Pin(reverser_pin, Pin.OUT)
 led = None
 hall_triggered = False
+last_hall_ms = 0
 
 # ============================================================
 # HARDWARE FUNCTIONS
@@ -65,8 +67,11 @@ def hall_interrupt(pin):
     On Psoc 6, touching peripherals in IRQ context can deadlock.
     We only set a flag; the main loop handles the rest.
     """
-    global hall_triggered
-    hall_triggered = True
+    global hall_triggered, last_hall_ms
+    now = time.ticks_ms()
+    if time.ticks_diff(now, last_hall_ms) >= hall_debounce_ms:
+        last_hall_ms = now
+        hall_triggered = True
 
 def init_hall_sensor():
     """Set up HALL sensor pin with falling-edge interrupt."""
@@ -177,6 +182,11 @@ def run_client(server_ip):
     print("Ready! Listening for commands from server...\n")
 
     lb = LineBuffer()
+    empty_recv_streak = 0
+    last_ping_ms = time.ticks_ms()
+    last_pong_ms = time.ticks_ms()
+    ping_interval_ms = 3000
+    pong_timeout_ms = 8000
 
     try:
         while True:
@@ -185,9 +195,16 @@ def run_client(server_ip):
                 chunk = sock.recv(512)
                 if chunk:  # got data
                     lb.feed(chunk)
+                    empty_recv_streak = 0
                 # NOTE: on non-blocking sockets, some MicroPython ports
                 # return b"" instead of raising EAGAIN when no data.
                 # We do NOT treat b"" as "connection closed" here.
+                elif chunk == b"":
+                    # If we repeatedly see empty reads, assume connection is stale.
+                    empty_recv_streak += 1
+                    if empty_recv_streak >= 5:
+                        print("Empty recv streak — reconnecting")
+                        break
             except OSError as e:
                 code = e.args[0]
                 if code in (errno.EAGAIN, 11):  # EAGAIN / EWOULDBLOCK
@@ -209,7 +226,10 @@ def run_client(server_ip):
                     break
                 if line:
                     print(f"Received: {line}")
-                    handle_command(line)
+                    if line == "PONG":
+                        last_pong_ms = time.ticks_ms()
+                    else:
+                        handle_command(line)
 
             # --- 3. Check HALL sensor (set by interrupt) ---
             if hall_triggered:
@@ -221,6 +241,21 @@ def run_client(server_ip):
                 except OSError as e:
                     print(f"Failed to send HALL: {e}")
                     break
+
+            # --- 4. Keepalive ping to detect broken connections ---
+            now = time.ticks_ms()
+            if time.ticks_diff(now, last_ping_ms) >= ping_interval_ms:
+                last_ping_ms = now
+                try:
+                    sock.send(b"PING\n")
+                except OSError as e:
+                    print(f"Keepalive failed: {e}")
+                    break
+
+            # --- 5. Reconnect if no PONG within timeout ---
+            if time.ticks_diff(now, last_pong_ms) >= pong_timeout_ms:
+                print("PONG timeout — reconnecting")
+                break
 
             # --- 4. Yield CPU briefly ---
             time.sleep(0.02)  # 20ms → 50 Hz loop

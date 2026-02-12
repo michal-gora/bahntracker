@@ -61,6 +61,7 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info("peername")
         print(f"📡 TCP connection from {peer}")
+        last_seen = asyncio.get_running_loop().time()
 
         try:
             # First message must be HELLO:MODEL
@@ -80,7 +81,7 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
 
             model_output.set_writer(writer)
 
-            # Read loop — model sends HALL events
+            # Read loop — model sends HALL / PING
             while True:
                 line = await reader.readline()
                 if not line:
@@ -90,9 +91,14 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
                 if not msg:
                     continue
 
+                last_seen = asyncio.get_running_loop().time()
+
                 if msg == "HALL":
                     print("🧲 HALL sensor triggered (from model via TCP)")
                     state_machine.on_hall_sensor()
+                elif msg == "PING":
+                    writer.write(b"PONG\n")
+                    await writer.drain()
                 else:
                     print(f"⚠️  Unknown message from model: {msg!r}")
 
