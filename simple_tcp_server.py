@@ -16,14 +16,18 @@ Commands (type and press Enter):
 
 import asyncio
 import sys
+import threading
 
 
 PORT = 8766
+client_writer = None
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    global client_writer
     peer = writer.get_extra_info("peername")
     print(f"\n✅ Client connected from {peer}")
+    client_writer = writer
     
     try:
         # Wait for HELLO:MODEL
@@ -36,54 +40,35 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             await writer.drain()
             print("📤 Sent: ACK")
         
-        # Create task to read from client
-        async def read_loop():
-            while True:
-                try:
-                    line = await reader.readline()
-                    if not line:
-                        print("\n⚠️  Client disconnected")
-                        break
-                    msg = line.decode().strip()
-                    print(f"📩 Received: {msg}")
-                except Exception as e:
-                    print(f"\n❌ Read error: {e}")
-                    break
-        
-        # Start reading in background
-        read_task = asyncio.create_task(read_loop())
-        
-        # Command loop - send commands to client
         print("\nCommands: p=ping, l=led_button, s=speed, r=reverser, q=quit")
-        print("Type command and press Enter:")
+        print("Type command and press Enter:\n")
         
-        loop = asyncio.get_running_loop()
-        
+        # Read from client in loop
         while True:
-            # Check if client disconnected
-            if read_task.done():
+            try:
+                line = await reader.readline()
+                if not line:
+                    print("\n⚠️  Client disconnected")
+                    break
+                msg = line.decode().strip()
+                print(f"📩 Received: {msg}")
+            except Exception as e:
+                print(f"\n❌ Read error: {e}")
                 break
-                
-            # Non-blocking check for user input
-            await asyncio.sleep(0.1)
             
     except asyncio.TimeoutError:
         print("❌ Timeout waiting for HELLO")
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
+        client_writer = None
         writer.close()
         await writer.wait_closed()
         print("\n🔌 Connection closed")
 
 
-async def send_commands(writer: asyncio.StreamWriter):
-    """Interactive command sending"""
-    loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    
+def input_thread():
+    """Thread to read stdin and send commands"""
     commands = {
         'p': b"ping;\n",
         'l': b"led_button;\n",
@@ -92,22 +77,37 @@ async def send_commands(writer: asyncio.StreamWriter):
     }
     
     while True:
-        line = await reader.readline()
-        cmd = line.decode().strip().lower()
-        
-        if cmd == 'q':
+        try:
+            cmd = input().strip().lower()
+            
+            if cmd == 'q':
+                print("Quitting...")
+                sys.exit(0)
+            
+            if cmd in commands:
+                if client_writer:
+                    msg = commands[cmd]
+                    client_writer.write(msg)
+                    asyncio.run_coroutine_threadsafe(client_writer.drain(), loop)
+                    print(f"📤 Sent: {msg.decode().strip()}")
+                else:
+                    print("⚠️  No client connected")
+            elif cmd:
+                print(f"Unknown command: {cmd}")
+        except EOFError:
             break
-        
-        if cmd in commands:
-            msg = commands[cmd]
-            writer.write(msg)
-            await writer.drain()
-            print(f"📤 Sent: {msg.decode().strip()}")
-        else:
-            print(f"Unknown command: {cmd}")
+        except Exception as e:
+            print(f"Input error: {e}")
 
 
 async def main():
+    global loop
+    loop = asyncio.get_running_loop()
+    
+    # Start input thread
+    thread = threading.Thread(target=input_thread, daemon=True)
+    thread.start()
+    
     server = await asyncio.start_server(handle_client, "0.0.0.0", PORT)
     addr = server.sockets[0].getsockname()
     print(f"🚀 TCP server listening on {addr[0]}:{addr[1]}")
