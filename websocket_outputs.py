@@ -40,14 +40,14 @@ class WebSocketModelOutput(ModelOutput):
     def send_speed(self, speed: float):
         """Send SPEED:x command (0.0 to 1.0)."""
         if self.websocket:
-            asyncio.create_task(self._send(f"SPEED:{speed:.2f}"))
+            asyncio.create_task(self._send(f"SPEED:{speed:.2f}\n"))
         # Still print for debugging
         # print(f"   → Model: SPEED:{speed:.2f}")
 
     def send_stop(self):
         """Send STOP command."""
         if self.websocket:
-            asyncio.create_task(self._send("STOP"))
+            asyncio.create_task(self._send("STOP\n"))
         # Still print for debugging
         # print(f"   → Model: STOP")
 
@@ -84,14 +84,14 @@ class WebSocketStationOutput(StationOutput):
         """Send STATION:name:valid or STATION:name:invalid."""
         validity = "valid" if valid else "invalid"
         if self.websocket:
-            asyncio.create_task(self._send(f"STATION:{name}:{validity}"))
+            asyncio.create_task(self._send(f"STATION:{name}:{validity}\n"))
         # Still print for debugging
         # print(f"   → Station: {name} {'✅' if valid else '❌'}")
 
     def send_clear(self):
         """Send STATION:clear."""
         if self.websocket:
-            asyncio.create_task(self._send("STATION:clear"))
+            asyncio.create_task(self._send("STATION:clear\n"))
         # Still print for debugging
         # print(f"   → Station: clear")
 
@@ -118,10 +118,10 @@ async def websocket_server_handler(websocket, path, model_output: WebSocketModel
                 client_type = msg.split(":")[1]
                 if client_type == "MODEL":
                     model_output.set_websocket(websocket)
-                    await websocket.send("ACK")
+                    await websocket.send("ACK\n")
                 elif client_type == "STATION":
                     station_output.set_websocket(websocket)
-                    await websocket.send("ACK")
+                    await websocket.send("ACK\n")
                 continue
             
             # Handle messages from identified clients

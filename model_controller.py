@@ -1,186 +1,192 @@
 import wifi
 import socket
-import websocket
-import hashlib
-import binascii
 import sys
 import time
 import errno
+import ujson
 from machine import Pin
 from machine import PWM
 
-is_led_on = True
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+SERVER_PORT = 8766
+
 led_pin = "P5_3"
 pwm_pin = "P9_7"
 reverser_pin = "P9_6"
 
+# ============================================================
+# HARDWARE GLOBALS
+# ============================================================
+
+is_led_on = True
 pwm = PWM(pwm_pin, freq=1000, duty_u16=0)
 reverser = Pin(reverser_pin, Pin.OUT)
 led = None
 
+# ============================================================
+# HARDWARE FUNCTIONS
+# ============================================================
+
 def toggle_led():
     global is_led_on, led
-    if led == None:
-        print(f"Error: led is None")
+    if led is None:
+        print("Error: led is None")
         return
     is_led_on = not is_led_on
     led.value(is_led_on)
     print(f"LED is now {'ON' if is_led_on else 'OFF'}")
-    
-def set_speed(speed : float):
-    """
-    Args:
-        speed: [0, 1], sets the PWM between 0% and 100%
-    """
+
+def set_speed(speed: float):
+    """Set motor PWM. speed: 0.0 to 1.0"""
     global pwm
-    
-    # Clipping speed to [0, 1]
-    speed = max(0., min(speed, 1.))
-    
+    speed = max(0.0, min(speed, 1.0))
     pwm.duty_u16(int(speed * 65535.0))
-    print(f"Set pwm duty cycle to {speed}")
-    return
-    
-def set_reverser(reversed : bool):
+    print(f"Set pwm duty cycle to {speed:.2f}")
+
+def stop_motor():
+    """Stop motor immediately."""
+    global pwm
+    pwm.duty_u16(0)
+    print("Motor stopped")
+
+def set_reverser(reversed: bool):
     global reverser
     reverser.value(reversed)
 
-def websocket_handshake(request):
-    lines = request.split('\r\n')
-    websocket_key = None
-    
-    for line in lines:
-        if line.startswith('Sec-WebSocket-Key:'):
-            websocket_key = line.split(': ')[1].strip()
-            break
-    
-    if not websocket_key:
+# ============================================================
+# SERVER CONFIG
+# ============================================================
+
+def load_server_config():
+    """Load server IP from server_config.json."""
+    try:
+        with open("server_config.json") as f:
+            cfg = ujson.load(f)
+            return cfg["server_ip"]
+    except Exception as e:
+        print(f"Could not load server_config.json: {e}")
         return None
-    
-    magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    accept_string = websocket_key + magic
-    sha1_hash = hashlib.sha1(accept_string.encode('utf-8')).digest()
-    accept_key = binascii.b2a_base64(sha1_hash).decode('utf-8').strip()
-    
-    response = (
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Accept: {accept_key}\r\n"
-        "\r\n"
-    )
-    
-    return response
-            
-def start_websocket_server():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(('', 4014))
-    s.listen(1)
-    
-    print("WebSocket server started on port 4014")
-    
-    while True:
+
+# ============================================================
+# PLAIN TCP CLIENT (no WebSocket!)
+# ============================================================
+
+def connect_to_server(server_ip):
+    """Connect to server via plain TCP. Returns socket or None."""
+    try:
+        addr = socket.getaddrinfo(server_ip, SERVER_PORT)[0][-1]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(addr)
+        print(f"TCP connected to {server_ip}:{SERVER_PORT}")
+
+        # Identify ourselves
+        sock.send(b"HELLO:MODEL\n")
+        print("Sent: HELLO:MODEL")
+
+        # Wait for ACK
+        sock.settimeout(5.0)
+        response = sock.recv(1024).decode().strip()
+        print(f"Received: {response}")
+
+        if response == "ACK":
+            print("Server acknowledged connection")
+            sock.setblocking(False)
+            return sock
+        else:
+            print(f"Expected ACK, got: {response}")
+            sock.close()
+            return None
+
+    except Exception as e:
+        print(f"Connection error: {e}")
         try:
-            conn, addr = s.accept()
-            print(f"Connection from {addr}")
+            sock.close()
+        except:
+            pass
+        return None
 
-            # Non-blocking mode
-            conn.setblocking(False)  # immediately return from reads with EAGAIN if no data
-            conn.settimeout(5.0)
-            request = b""
+def handle_command(line_str):
+    """Handle a command received from the server."""
+    if line_str.startswith("SPEED:"):
+        try:
+            value = float(line_str.split(':')[1])
+            set_speed(value)
+        except (IndexError, ValueError):
+            print(f"Invalid SPEED format: {line_str}")
+    elif line_str == "STOP":
+        stop_motor()
+    else:
+        print(f"Unknown command: {line_str}")
+
+def run_client(server_ip):
+    """Main client loop: connect, receive commands, send HALL events."""
+    sock = connect_to_server(server_ip)
+    if sock is None:
+        return False
+
+    print("Ready! Listening for commands from server...\n")
+
+    recv_buf = b""
+
+    try:
+        while True:
             try:
-                request = conn.recv(1024).decode('utf-8')
-            except OSError:
-                # No data yet
-                pass
+                chunk = sock.recv(1024)
+                if chunk:
+                    recv_buf += chunk
+                    # Process complete lines
+                    while b"\n" in recv_buf:
+                        line, recv_buf = recv_buf.split(b"\n", 1)
+                        line_str = line.decode('utf-8', 'ignore').strip()
+                        if line_str:
+                            print(f"Received: {line_str}")
+                            handle_command(line_str)
+                elif chunk == b"":
+                    # Connection closed
+                    print("Server closed connection")
+                    break
 
-            if 'websocket' in request.lower() and 'upgrade' in request.lower():
-                handshake_response = websocket_handshake(request)
-                if handshake_response:
-                    conn.send(handshake_response.encode('utf-8'))
-                    print("WebSocket connected")
-                    
-                    ws = websocket.websocket(conn)
-
-                    try:
-                        while True:
-                            try:
-                                raw_line = ws.readline()
-                                if not raw_line:
-                                    print("Client disconnected (EOF)")
-                                    break  # exit work loop
-                                line_str = raw_line.decode('utf-8', 'ignore').strip()
-
-                                """
-                                Train Control Protocol:
-                                    RegEx: <command name>[":"<value>|";"]
-                                    Commands should be snake_case.
-                                    Values are preferred as int > float > String
-                                    Summary:
-                                    Commands that simply send a signal without passing arguments, end with ";"
-                                    Commands that pass an argument, separate name from value with a ":"
-                                """
-                                if line_str == "ping;":
-                                    print("Received Ping")
-                                    ws.write(b"pong\n")
-                                elif line_str == "led_button;":
-                                    print("Received Button")
-                                    toggle_led()
-                                    ws.write(b"LED toggled!\n")
-                                elif line_str.startswith("speed:"):
-                                    print("Received slider")
-                                    ws.write(b"Slider received!\n")
-                                    try:
-                                        value = float(line_str.split(':')[1])
-                                        set_speed(value)
-                                        print(f"Slider value: {value}")
-                                    except (IndexError, ValueError):
-                                        print("Invalid slider format")
-                                elif line_str.startswith("reverser:"):
-                                    reverser_state = bool(int(line_str.split(":")[1]))
-                                    print("Reverser state:", reverser_state)
-                                    set_reverser(reverser_state)
-                                else:
-                                    print(f"Received else: {line_str}")
-                                    ws.write(b"Line received\n")
-
-                            except OSError as e:
-                                code = e.args[0]
-                                if code == errno.ECONNRESET:
-                                    print("Connection reset/broken pipe – closing")
-                                    break
-                                elif code == errno.EAGAIN:
-                                    # No data this cycle — skip work
-                                    pass
-                                elif code == errno.ETIMEDOUT:
-                                    print("Connection timed out - closing")
-                                    break
-                                else:
-                                    print("Other socket error:", e)
-                                    break
-
-                            # Do other tasks here...
-                            time.sleep(0.1)
-                    except Exception as e:
-                        print(f"WebSocket error: {e}")
-                    finally:
-                        print("Closing connection")
-                        try:
-                            ws.close()
-                        except:
-                            pass
-                        try:
-                            conn.close()
-                        except:
-                            pass
+            except OSError as e:
+                code = e.args[0]
+                if code == errno.ECONNRESET:
+                    print("Connection reset - closing")
+                    break
+                elif code == errno.EAGAIN:
+                    # No data this cycle - that's fine
+                    pass
+                elif code == errno.ETIMEDOUT:
+                    print("Connection timed out - closing")
+                    break
                 else:
-                    conn.close()
-            else:
-                conn.close()
-                
-        except Exception as e:
-            print(f"Server error: {e}")
+                    print(f"Socket error: {e}")
+                    break
+
+            # TODO: Check HALL sensor here and send if triggered
+            # if hall_triggered:
+            #     hall_triggered = False
+            #     sock.send(b"HALL\n")
+            #     print("Sent: HALL")
+            #     stop_motor()  # Safety stop
+
+            time.sleep(0.05)
+
+    except Exception as e:
+        print(f"Client error: {e}")
+    finally:
+        print("Closing connection")
+        try:
+            sock.close()
+        except:
+            pass
+
+    return True
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
     global led, is_led_on
@@ -188,7 +194,6 @@ def main():
     reverser.value(False)
 
     # Connect to WiFi
-
     print("Connecting to WiFi...")
     try:
         if not wifi.network_connect():
@@ -196,6 +201,7 @@ def main():
             led_pwm.deinit()
             sys.exit()
     except Exception as e:
+        print(f"WiFi error: {e}")
         led_pwm.deinit()
         sys.exit()
 
@@ -204,7 +210,21 @@ def main():
     led.value(True)
     is_led_on = True
 
-    start_websocket_server()
+    # Load server IP
+    server_ip = load_server_config()
+    if not server_ip:
+        print("No server IP configured. Create server_config.json with {\"server_ip\": \"x.x.x.x\"}")
+        return
+
+    print(f"Server: {server_ip}:{SERVER_PORT}")
+
+    # Connect to server with reconnection loop
+    while True:
+        stop_motor()  # Safety: ensure motor is off before connecting
+        print(f"\nConnecting to server {server_ip}:{SERVER_PORT}...")
+        run_client(server_ip)
+        print("Reconnecting in 5 seconds...")
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
