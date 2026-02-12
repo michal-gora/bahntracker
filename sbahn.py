@@ -77,11 +77,19 @@ async def get_incoming_trains(ws, uic: str, max_trains: int = 100) -> list:
                     destination = (content.get("to") or ["Unknown"])[0]
                     time_ms = content.get("time", 0)
                     time_str = datetime.fromtimestamp(time_ms / 1000).strftime("%H:%M")
+                    state = content.get("state")
+                    
+                    # Filter out trains that are clearly not running (CANCELLED state if it exists)
+                    if state == "CANCELLED":
+                        continue
+                    
                     trains.append({
                         "number": train_number,
                         "destination": destination,
                         "time": time_str,
                         "timestamp": time_ms,
+                        "state": state,
+                        "has_realtime": content.get("has_realtime_journey", False),
                     })
                     if len(trains) >= max_trains:
                         break
@@ -92,9 +100,19 @@ async def get_incoming_trains(ws, uic: str, max_trains: int = 100) -> list:
 
 
 def pick_target_train(trains: list) -> int | None:
-    """Pick first train going to one of our target destinations."""
+    """Pick first train going to one of our target destinations in the next 30 minutes."""
+    import time
+    now_ms = time.time() * 1000
+    max_future_ms = now_ms + (30 * 60 * 1000)  # 30 minutes from now
+    
     for t in trains:
         dest = t.get("destination", "")
+        timestamp = t.get("timestamp", 0)
+        
+        # Only consider trains departing in the next 30 minutes
+        if timestamp < now_ms or timestamp > max_future_ms:
+            continue
+        
         if any(d in dest for d in TARGET_DESTINATIONS):
             print(f"🎯 Selected: Train {t['number']} → {t['destination']} @ {t['time']}")
             return t["number"]

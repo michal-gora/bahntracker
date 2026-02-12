@@ -33,7 +33,7 @@ class TrainStateMachine:
 
     TRACK_LOOP_SECONDS = 10.0   # Time for model to go one station at full speed (calibrate!)
     NONAME_TRAVEL_SECONDS = 8.0  # Time from Fasanenpark to noname (calibrate!)
-    MIN_SPEED = 0.1
+    MIN_SPEED = 0.01
     MAX_SPEED = 1.0
 
     def __init__(self, model_output, station_output, stations: list):
