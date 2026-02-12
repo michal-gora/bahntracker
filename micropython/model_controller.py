@@ -216,3 +216,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+### TODO:
+# - Add watchdog timer to reset if connection lost for too long
+# - Add hall effect sensor reading and send "HALL\n" to server when triggered
+# - Add error handling for malformed commands
+# - Finally adjust it in sbahn server script to send speed and reverser commands based on state machine logic
