@@ -1,75 +1,64 @@
 """
-Test TCP client to simulate the model train.
+Test WebSocket client to simulate the model train.
 
 Usage: python test_model_client.py [server_ip]
-Default server: localhost:8766
+Default server: localhost:8765
 """
 
 import asyncio
 import sys
+import websockets
 
 
-async def model_client(server_ip="localhost", port=8766):
-    """Connect to server as model train via plain TCP."""
-    print(f"🔌 Connecting to {server_ip}:{port} (TCP)...")
+async def model_client(server_ip="localhost", port=8765):
+    """Connect to server as model train via WebSocket."""
+    uri = f"ws://{server_ip}:{port}"
+    print(f"🔌 Connecting to {uri}...")
 
-    reader, writer = await asyncio.open_connection(server_ip, port)
-    print("✅ TCP connected")
+    async with websockets.connect(uri) as websocket:
+        # Identify as model
+        await websocket.send("HELLO:MODEL")
+        print("→ Sent: HELLO:MODEL")
 
-    # Identify as model
-    writer.write(b"HELLO:MODEL\n")
-    await writer.drain()
-    print("→ Sent: HELLO:MODEL")
+        # Wait for ACK
+        response = await websocket.recv()
+        print(f"← Received: {response}")
 
-    # Wait for ACK
-    response = await reader.readline()
-    resp = response.decode().strip()
-    print(f"← Received: {resp}")
+        if response != "ACK":
+            print(f"❌ Expected ACK, got: {response}")
+            return
 
-    if resp != "ACK":
-        print(f"❌ Expected ACK, got: {resp}")
-        writer.close()
-        return
+        print("✅ Connection established!")
+        print("\nListening for commands from server...")
+        print("Type h + Enter to send HALL sensor event")
+        print("Type q + Enter to quit\n")
 
-    print("✅ Connection established!")
-    print("\nListening for commands from server...")
-    print("Type h + Enter to send HALL sensor event")
-    print("Type q + Enter to quit\n")
+        async def listen_server():
+            try:
+                async for message in websocket:
+                    print(f"← Received: {message}")
+                    if message.startswith("SPEED:"):
+                        speed = float(message.split(":")[1])
+                        print(f"   🚂 Setting speed to {speed:.2f}")
+                    elif message == "STOP":
+                        print(f"   🛑 Stopping motor")
+            except Exception as e:
+                print(f"[Server connection closed: {e}]")
 
-    async def listen_server():
-        try:
+        async def listen_stdin():
+            loop = asyncio.get_event_loop()
             while True:
-                line = await reader.readline()
-                if not line:
-                    print("[Server closed connection]")
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                cmd = line.strip().lower()
+                if cmd == "h":
+                    await websocket.send("HALL")
+                    print("→ Sent: HALL")
+                elif cmd == "q":
+                    print("Quitting...")
+                    await websocket.close()
                     break
-                msg = line.decode().strip()
-                if not msg:
-                    continue
-                print(f"← Received: {msg}")
-                if msg.startswith("SPEED:"):
-                    speed = float(msg.split(":")[1])
-                    print(f"   🚂 Setting speed to {speed:.2f}")
-                elif msg == "STOP":
-                    print(f"   🛑 Stopping motor")
-        except Exception as e:
-            print(f"[Server connection closed: {e}]")
 
-    async def listen_stdin():
-        loop = asyncio.get_event_loop()
-        while True:
-            line = await loop.run_in_executor(None, sys.stdin.readline)
-            cmd = line.strip().lower()
-            if cmd == "h":
-                writer.write(b"HALL\n")
-                await writer.drain()
-                print("→ Sent: HALL")
-            elif cmd == "q":
-                print("Quitting...")
-                writer.close()
-                break
-
-    await asyncio.gather(listen_server(), listen_stdin())
+        await asyncio.gather(listen_server(), listen_stdin())
 
 
 if __name__ == "__main__":
