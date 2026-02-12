@@ -46,19 +46,40 @@ def set_reverser(reversed : bool):
 def start_socket_client():
     IP_ADDRESS = "192.168.53.131"
     PORT = 8766
+    RECONNECT_DELAY = 5  # seconds
     
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.connect((IP_ADDRESS, PORT))
-    s.setblocking(False)  # Set non-blocking ONCE after connect
-    
-    print(f"Client connected to server at {IP_ADDRESS}:{PORT}")
-    
-    # Send HELLO handshake
-    s.write(b"HELLO:MODEL\n")
-    print("Sent HELLO:MODEL")
+    s = None
     
     while True:
+        # Connection/reconnection loop
+        if s is None:
+            try:
+                print(f"Attempting to connect to {IP_ADDRESS}:{PORT}...")
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.settimeout(5.0)  # 5 second timeout for connect
+                s.connect((IP_ADDRESS, PORT))
+                s.setblocking(False)  # Set non-blocking after connect
+                
+                print(f"✓ Connected to server at {IP_ADDRESS}:{PORT}")
+                
+                # Send HELLO handshake
+                s.write(b"HELLO:MODEL\n")
+                print("Sent HELLO:MODEL")
+                
+            except OSError as e:
+                print(f"✗ Connection failed: {e}")
+                if s:
+                    try:
+                        s.close()
+                    except:
+                        pass
+                    s = None
+                print(f"Retrying in {RECONNECT_DELAY} seconds...")
+                time.sleep(RECONNECT_DELAY)
+                continue
+        
+        # Main communication loop
         try:
             # Read line (non-blocking)
             raw_line = b""
@@ -68,6 +89,33 @@ def start_socket_client():
                 if e.args[0] != errno.EAGAIN:
                     raise
                 # No data available
+            
+            # Check if connection was closed (readline returns empty bytes)
+            if raw_line == b"":
+                # Empty read could mean closed connection, check again
+                try:
+                    # Try another read to confirm
+                    test = s.recv(1)
+                    if test == b"":
+                        print("✗ Server closed connection - reconnecting")
+                        try:
+                            s.close()
+                        except:
+                            pass
+                        s = None
+                        time.sleep(RECONNECT_DELAY)
+                        continue
+                except OSError as e:
+                    if e.args[0] != errno.EAGAIN:
+                        # Connection is dead
+                        print("✗ Connection lost - reconnecting")
+                        try:
+                            s.close()
+                        except:
+                            pass
+                        s = None
+                        time.sleep(RECONNECT_DELAY)
+                        continue
             
             # Only process if we got data
             if raw_line:
@@ -109,17 +157,35 @@ def start_socket_client():
         except OSError as e:
             code = e.args[0]
             if code == errno.ECONNRESET:
-                print("Connection reset/broken pipe – closing")
-                break
+                print("✗ Connection reset/broken pipe – reconnecting")
+                try:
+                    s.close()
+                except:
+                    pass
+                s = None
+                time.sleep(RECONNECT_DELAY)
+                continue
             elif code == errno.EAGAIN:
                 # No data this cycle — skip work
                 pass
             elif code == errno.ETIMEDOUT:
-                print("Connection timed out - closing")
-                break
+                print("✗ Connection timed out - reconnecting")
+                try:
+                    s.close()
+                except:
+                    pass
+                s = None
+                time.sleep(RECONNECT_DELAY)
+                continue
             else:
-                print("Other socket error:", e)
-                break
+                print(f"✗ Socket error: {e} - reconnecting")
+                try:
+                    s.close()
+                except:
+                    pass
+                s = None
+                time.sleep(RECONNECT_DELAY)
+                continue
 
         # Do other tasks here...
         time.sleep(0.1)
