@@ -4,7 +4,12 @@ import websockets
 from pyproj import Transformer
 
 WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
-TRAIN_ID = "sbm_140330651162704"  # Train 6398 to Mammendorf
+# TRAIN_ID = "sbm_140330651162704"  # Train 6398 to Mammendorf
+# TRAIN_ID = "sbm_140265128772992"  # Train to Leuchtenbergring S1
+# TRAIN_ID = "sbm_140265161331808" # S6 Tutzing
+# TRAIN_ID = "sbm_140265140401920" # S8 Herrsching
+TRAIN_ID = "sbm_140265243803856" # S3 Maisach
+LINE_NAME = "S3"
 
 # Create transformer from EPSG:3857 (Web Mercator) to WGS84 (lat/lon)
 transformer = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
@@ -95,22 +100,26 @@ async def display_route():
                                         "coordinates": [[lon, lat] for lat, lon in latlon_coords]
                                     },
                                     "properties": {
-                                        "train": "6398",
-                                        "line": "S3",
-                                        "from": "Fasanenpark",
-                                        "to": "Mammendorf"
+                                        # "train": "6398",
+                                        # "line": "S3",
+                                        # "from": "Fasanenpark",
+                                        # "to": "Mammendorf"
+                                        "name": LINE_NAME
                                     }
                                 }]
                             }
                             
-                            with open('/home/wsluser/bahntracker/route.geojson', 'w') as f:
+                            geojson_location = "routes_geojson"
+                            csv_location = "routes_csv"
+
+                            with open(f"{geojson_location}/route_{LINE_NAME}.geojson", 'w') as f:
                                 json.dump(geojson, f, indent=2)
                             
                             print("✅ Saved to route.geojson")
                             print("   You can open this file at: https://geojson.io/")
                             
                             # Also save CSV
-                            with open('/home/wsluser/bahntracker/route.csv', 'w') as f:
+                            with open(f"{csv_location}/route_{LINE_NAME}.csv", 'w') as f:
                                 f.write("latitude,longitude\n")
                                 for lat, lon in latlon_coords:
                                     f.write(f"{lat:.6f},{lon:.6f}\n")
