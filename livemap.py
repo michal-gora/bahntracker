@@ -1,90 +1,115 @@
-from flask import Flask, jsonify
-import folium
+import websocket
 import json
+import threading
+import time
+import traceback
+import math
 
-app = Flask(__name__)
-ROUTES_FILE = 'route.geojson'
+# YOUR SETTINGS
+API_KEY = "5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
+WS_URL = f"wss://api.geops.io/realtime-ws/v1/?key={API_KEY}"
 
-LIVE_TRAINS = [
-    {"id": "S1", "lat": 48.137, "lon": 11.575},
-    {"id": "S8", "lat": 48.120, "lon": 11.620}
-]
+# Different BBOX attempts (Munich Area)
+BBOX_MUNICH = "BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm"
+# BBOX_ZURICH = "BBOX 946000 5990000 962000 6010000 10" # Known working fallback
 
-@app.route('/')
-def map_view():
-    m = folium.Map(location=[48.1351, 11.5820], zoom_start=11)
+def on_open(ws):
+    print("\n✅ CONNECTED to geOps!")
+    print("------------------------------------------------")
     
-    # Static routes
+    # 1. Send Buffer (Vital to prevent timeout)
+    print(">> Sending BUFFER 100 100...")
+    ws.send("BUFFER 100 100")
+    time.sleep(1)
+    
+    # 2. Send BBOX
+    print(f">> Sending {BBOX_MUNICH}...")
+    ws.send(BBOX_MUNICH)
+    print("------------------------------------------------")
+    print("⏳ Waiting for data... (Press Ctrl+C to stop)")
+
+def on_message(ws, message):
     try:
-        with open(ROUTES_FILE, 'r') as f:
-            folium.GeoJson(json.load(f), name='Routes', 
-                          style_function=lambda x: {'color': 'blue', 'weight': 4}).add_to(m)
-    except:
-        folium.PolyLine([[48.35, 11.79], [48.25, 11.64], [48.14, 11.56]],
-                       color='blue', weight=5).add_to(m)
+        msg = json.loads(message)
+        source = msg.get('source')
+        
+        # 1. Unpack Buffer or Single Trajectory
+        # We normalize everything into a list of "message objects"
+        items = []
+        if source == 'trajectory':
+            items = [msg] 
+        elif source == 'buffer':
+            items = msg.get('content', []) 
+            # Defensive: verify it is actually a list
+            if not isinstance(items, list):
+                return
+        else:
+            # Ignore other messages (status, etc)
+            return
+        
+        # 2. Process Items
+        for item in items:
+            # Defensive: Item must be a dict
+            if not isinstance(item, dict):
+                continue
 
-    # Static Green Circle (Hardcoded)
-    folium.CircleMarker([48.1375, 11.5760], radius=8, color='green', popup='Static').add_to(m)
-    
-    # --- FIXED JAVASCRIPT SECTION ---
-    # We get the map's auto-generated variable name
-    map_var = m.get_name()
-    
-    m.get_root().html.add_child(folium.Element(f"""
-        <script>
-        document.addEventListener("DOMContentLoaded", function() {{
-            setTimeout(function() {{
-                var myMap = {map_var};
-                var currentLayer = L.layerGroup().addTo(myMap); // Active layer
+            # Verify source is trajectory
+            if item.get('source') != 'trajectory':
+                continue
+            
+            # Extract content safely
+            content = item.get('content')
+            if not content or not isinstance(content, dict):
+                continue
 
-                function updateTrains() {{
-                    fetch('/api/trains')
-                        .then(r => r.json())
-                        .then(trains => {{
-                            // 1. Create NEW invisible layer
-                            var newLayer = L.layerGroup();
-                            
-                            trains.forEach(t => {{
-                                L.circleMarker([t.lat, t.lon], {{
-                                    radius: 12, color: 'red', fillOpacity: 0.9
-                                }}).bindPopup('S-' + t.id).addTo(newLayer);
-                            }});
+            props = content.get('properties', {})
+            geom = content.get('geometry', {})
+            
+            # Get ID & Line
+            train_id = props.get('train_id', 'unknown')
+            line_name = props.get('line', {}).get('name', '?')
+            
+            # Get Coordinates
+            lat, lon = 0.0, 0.0
+            
+            # A) Try RAW Lat/Lon (Best)
+            if 'raw_coordinates' in props:
+                raw = props['raw_coordinates']
+                if isinstance(raw, list) and len(raw) >= 2:
+                    lon, lat = raw[0], raw[1]
+            
+            # B) Fallback to Geometry (EPSG:3857)
+            if lat == 0.0 and geom:
+                coords = geom.get('coordinates', [])
+                if coords and len(coords) > 0:
+                    x, y = coords[0]
+                    # Inverse Mercator
+                    lon = (x / 20037508.34) * 180
+                    lat = (y / 20037508.34) * 180
+                    lat = 180 / math.pi * (2 * math.atan(math.exp(lat * math.pi / 180)) - math.pi / 2)
 
-                            // 2. Add new layer to map (instant visible)
-                            newLayer.addTo(myMap);
-                            
-                            // 3. Remove old layer (instant swap)
-                            myMap.removeLayer(currentLayer);
-                            
-                            // 4. Update reference
-                            currentLayer = newLayer;
-                        }})
-                        .catch(e => console.error("Fetch error:", e));
-                }}
+            # PRINT RESULT (Success!)
+            if lat != 0 and lon != 0:
+                print(f"✅ Found: {line_name} ({train_id}) at {lat:.5f}, {lon:.5f}")
                 
-                setInterval(updateTrains, 2000);
-                updateTrains();
-            }}, 500);
-        }});
-        </script>
-    """))
+    except Exception:
+        traceback.print_exc()
 
-    
-    folium.LayerControl().add_to(m)
-    return m._repr_html_()
 
-@app.route('/api/trains')
-def get_trains():
-    global LIVE_TRAINS
-    LIVE_TRAINS[0]['lat'] += 0.001
-    LIVE_TRAINS[1]['lon'] += 0.001
-    
-    # Loop movement
-    if LIVE_TRAINS[0]['lat'] > 48.16: LIVE_TRAINS[0]['lat'] = 48.13
-    if LIVE_TRAINS[1]['lon'] > 11.66: LIVE_TRAINS[1]['lon'] = 11.60
-    
-    return jsonify(LIVE_TRAINS)
+def on_error(ws, error):
+    print(f"❌ ERROR: {error}")
 
-if __name__ == '__main__':
-    print("🚂 http://localhost:5000")
-    app.run(debug=True, port=5000)
+def on_close(ws, status, msg):
+    print(f"⚠️ CLOSED: {status} - {msg}")
+
+# Main execution
+if __name__ == "__main__":
+    websocket.enableTrace(False) # Set True for full network debug
+    ws = websocket.WebSocketApp(
+        WS_URL,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.run_forever()
