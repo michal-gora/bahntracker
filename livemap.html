@@ -4440,7 +4440,11 @@
             const BBOX = "1269000 6087000 1350000 6200000 5 tenant=sbm";
 
             // --- MAP SETUP ---
-            var map = L.map('map', { zoomControl: false, zoomSnap: 0, zoomDelta: 0.1 }).setView([48.137, 11.575], 11);
+            var map = L.map('map', {
+                zoomSnap: 0,
+                zoomDelta: 1
+            }).setView([48.137, 11.575], 11);
+
 
             // 1. Define Base Layers
             var cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
