@@ -4481,7 +4481,7 @@
             L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
 
 
-            // --- 1. DRAW ROUTES ---
+            // --- LOAD ROUTES ---
             if (ROUTES_DATA && ROUTES_DATA.features && ROUTES_DATA.features.length > 0) {
                 L.geoJSON(ROUTES_DATA, {
                     style: function (feature) {
@@ -4491,8 +4491,9 @@
                             opacity: 0.7
                         };
                     }
-                }).addTo(map);
+                }).addTo(routeLayer);
             }
+
 
             // --- 2. DRAW STATIC STATIONS (New Logic) ---
             if (typeof STATIONS_DATA !== 'undefined' && STATIONS_DATA.length > 0) {
