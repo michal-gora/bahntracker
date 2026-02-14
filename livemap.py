@@ -170,8 +170,48 @@ threading.Thread(target=run_geops_client, daemon=True).start()
 # --- FLASK ---
 @app.route('/')
 def map_view():
-    # 1. SET HEIGHT/WIDTH TO 100%
-    m = folium.Map(location=[48.137, 11.575], zoom_start=11, height="100%", width="100%")
+    # 1. INITIALIZE MAP (tiles=None so we can add custom layer)
+    m = folium.Map(location=[48.137, 11.575], zoom_start=11, height="100%", width="100%", tiles=None, control_scale=True, zoom_snap=0, zoom_delta=1)
+    
+    # 2. CUSTOM TILE LAYER (The Fix for Size + Sharpness)
+    folium.TileLayer(
+        tiles='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        name='OpenStreetMap',
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        detect_retina=True,
+        show=False
+    ).add_to(m)
+
+    ## CARTO VOYAGER
+    folium.TileLayer(
+        tiles="CartoDB Voyager",  # <--- SWITCHED TO CARTO VOYAGER
+        name='CartoDB Voyager',
+        show=True
+        # detect_retina=True
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles="CartoDB Positron",  # <--- SWITCHED TO CARTO VOYAGER
+        name='CartoDB Positron',
+        show=False
+        # detect_retina=True
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles='CartoDB dark_matter',
+        name='Dark Mode',
+        control=True,
+        show=False
+    ).add_to(m)
+
+    ## ARCGINSONLINE
+    folium.TileLayer(
+        name="Satellite (Esri)",
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri",
+        show=False,
+        detect_retina=True
+    ).add_to(m)
     
     # Routes
     routes_dir = 'routes_geojson'
@@ -191,23 +231,17 @@ def map_view():
     train_layer_var = train_layer.get_name()
     station_layer_var = station_layer.get_name()
 
-    # 2. ADD GLOBAL CSS FOR FULL SCREEN
+    # 3. META TAG (Keep this!)
+    m.get_root().header.add_child(folium.Element(
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />'
+    ))
+
+    # 4. GLOBAL CSS
     m.get_root().html.add_child(folium.Element("""
         <style>
-        /* RESET BODY MARGINS TO 0 AND FORCE FULL HEIGHT */
-        html, body {
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-        }
-        .folium-map {
-            width: 100%;
-            height: 100%;
-        }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        .folium-map { width: 100%; height: 100%; }
         
-        /* Your existing styles */
         .icon-container { position: relative; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; }
         .train-circle { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: sans-serif; font-weight: bold; font-size: 10px; color: white; z-index: 3; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
         .driving { border-radius: 50%; border: 2px solid white; }
@@ -228,8 +262,8 @@ def map_view():
                 var markers = {{}}; 
                 var trainData = {{}}; 
                 var TIME_OFFSET = 0.0; 
+                var ENABLE_INTERPOLATION = false; // Set to false to disable
 
-                // 1. Fetch and Draw Stations
                 setTimeout(() => {{
                     fetch('/api/stations').then(r=>r.json()).then(stations => {{
                         stations.forEach(s => {{
@@ -251,7 +285,6 @@ def map_view():
                         data.forEach(t => {{
                             activeIds.add(t.id);
                             trainData[t.id] = t;
-                            
                             var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
                             var arrowStyle = (t.heading !== null) ? `transform: rotate(${{t.heading}}deg); color: ${{t.color}};` : 'display: none;';
                             var iconHtml = `
@@ -270,31 +303,41 @@ def map_view():
 
                 function animate() {{
                     var now = (Date.now() / 1000) + TIME_OFFSET;
+                    
                     Object.keys(trainData).forEach(id => {{
                         var t = trainData[id];
                         var marker = markers[id];
                         var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
-                        if (!isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {{
+
+                        // Check the toggle flag here
+                        if (ENABLE_INTERPOLATION && !isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {{
                             var totalDuration = t.next_ts - t.start_ts;
                             var elapsed = now - t.start_ts;
                             if (totalDuration > 0) {{
                                 var p = Math.max(0, Math.min(elapsed / totalDuration, 1.05));
                                 marker.setLatLng([t.lat + (t.next_lat - t.lat) * p, t.lon + (t.next_lon - t.lon) * p]);
-                            }} else marker.setLatLng([t.next_lat, t.next_lon]);
-                        }} else marker.setLatLng([t.lat, t.lon]);
+                            }} else {{
+                                marker.setLatLng([t.next_lat, t.next_lon]);
+                            }}
+                        }} else {{
+                            // Fallback (snap to last known pos)
+                            marker.setLatLng([t.lat, t.lon]);
+                        }}
                     }});
                     requestAnimationFrame(animate);
                 }}
                 setInterval(update, 1500);
                 requestAnimationFrame(animate);
+
             }}, 1000);
         }});
         </script>
     """))
     folium.LayerControl(collapsed=False).add_to(m)
-    
-    # 3. USE RENDER() INSTEAD OF _repr_html_()
     return m.get_root().render()
+
+
+
 
 
 @app.route('/api/trains')
