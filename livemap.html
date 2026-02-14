@@ -4442,13 +4442,44 @@
             // --- MAP SETUP ---
             var map = L.map('map', { zoomControl: false, zoomSnap: 0, zoomDelta: 0.1 }).setView([48.137, 11.575], 11);
 
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-                attribution: 'CARTO',
-                maxZoom: 20
-            }).addTo(map);
+            // 1. Define Base Layers
+            var cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: 'CARTO', maxZoom: 20
+            }).addTo(map); // Default
 
-            var stationLayer = L.layerGroup().addTo(map);
-            var trainLayer = L.layerGroup().addTo(map);
+            var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: 'OSM'
+            });
+
+            var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: 'CARTO'
+            });
+
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Esri'
+            });
+
+            // 2. Define Overlay Layers (Groups)
+            var routeLayer = L.layerGroup().addTo(map);   // Routes (Static)
+            var stationLayer = L.layerGroup().addTo(map); // Stations (Static)
+            var trainLayer = L.layerGroup().addTo(map);   // Trains (Dynamic)
+
+            // 3. Add Layer Control to Map
+            var baseMaps = {
+                "Modern (Voyager)": cartoVoyager,
+                "Standard (OSM)": osm,
+                "Dark Mode": cartoDark,
+                "Satellite": satellite
+            };
+
+            var overlayMaps = {
+                "S-Bahn Network": routeLayer,
+                "Stations": stationLayer,
+                "Live Trains": trainLayer
+            };
+
+            L.control.layers(baseMaps, overlayMaps, { collapsed: false }).addTo(map);
+
 
             // --- 1. DRAW ROUTES ---
             if (ROUTES_DATA && ROUTES_DATA.features && ROUTES_DATA.features.length > 0) {
