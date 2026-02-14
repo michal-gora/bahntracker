@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>S-Bahn Live</title>
+    <!-- Load Leaflet from CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"/>
+    <style>
+        /* Force full screen height */
+        html, body { 
+            width: 100%; 
+            height: 100%; 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            background: #e0e0e0; 
+        }
+        #map { 
+            width: 100vw; 
+            height: 100vh; /* Use Viewport Height to guarantee visibility */
+        }
+        
+        .icon-container { position: relative; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; }
+        .train-circle { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: sans-serif; font-weight: bold; font-size: 10px; color: white; z-index: 3; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+        .driving { border-radius: 50%; border: 2px solid white; }
+        .boarding { border-radius: 50%; border: 3px double white; transform: scale(1.0); }
+        .arrow-pointer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 5; pointer-events: none; }
+        .arrow-pointer::before { content: ''; position: absolute; top: -6px; left: 50%; margin-left: -7px; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 11px solid white; transform-origin: center 21px; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    
+    <script>
+    // WRAPPED IN TRY/CATCH TO CATCH ERRORS
+    try {
+        console.log("Initializing Map...");
+
+        // ============================================================
+        // 1. EMBEDDED ROUTE GEOJSON (From your paste.txt)
+        // ============================================================
+        const ROUTES_DATA = {
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "color": "#005293" }, 
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            11.697322640633937,
+            47.884468583110234
+          ],
+          [
+            11.694277351820771,
+            47.887028869158094
+          ],
+          [
+            11.693540733287794,
+            47.88757103114258
+          ],
+          [
+            11.69202258045763,
+            47.88896255425956
+          ],
+          [
+            11.691492574440002,
+            47.88955890986477
+          ],
+          [
+            11.690908669505323,
+            47.8903118743049
+          ],
+          [
+            11.690423579251899,
+            47.8910347098681
+          ],
+          [
+            11.689803741705855,
+            47.892076780047915
+          ],
+          [
+            11.689435432439367,
+            47.89276947405634
+          ],
+          [
+            11.688824578046166,
+            47.89414278782497
+          ],
+          [
+            11.682437556376076,
+            47.91069196790386
+          ],
+          [
+            11.682141112332316,
+            47.9113422643124
+          ],
+          [
+            11.681305679118084,
+            47.913395461377156
+          ],
+          [
+            11.67803581148389,
+            47.92196863558883
+          ],
+          [
+            11.66120138305949,
+            47.965396650818455
+          ],
+          [
+            11.660806124334478,
+            47.966268808768994
+          ],
+          [
+            11.660087472107183,
+            47.967622128157025
+          ],
+          [
+            11.659440685102616,
+            47.96866867083606
+          ],
+          [
+            11.658659150805432,
+            47.9697753365765
+          ],
+          [
+            11.657922532272453,
+            47.97073162102416
+          ],
+          [
+            11.657096082211064,
+            47.97169390196439
+          ],
+          [
+            11.654859277153605,
+            47.97397924733353
+          ],
+          [
+            11.654688597249624,
+            47.97419574849216
+          ],
+          [
+            11.65406875970358,
+            47.9747069281814
+          ],
+          [
+            11.652532640567737,
+            47.975861574265615
+          ],
+          [
+            11.651544493755205,
+            47.976553146795666
+          ],
+          [
+            11.64985566102106,
+            47.97762356253394
+          ],
+          [
+            11.648166828286916,
+            47.97857368824916
+          ],
+          [
+            11.59249823013003,
+            48.008427589338424
+          ],
+          [
+            11.590908212077139,
+            48.00935911860426
+          ],
+          [
+            11.589704469596418,
+            48.01020048541476
+          ],
+          [
+            11.58889598584071,
+            48.01086154970774
+          ],
+          [
+            11.587809024346925,
+            48.011919234950646
+          ],
+          [
+            11.586973591132693,
+            48.01292882335499
+          ],
+          [
+            11.586416635656539,
+            48.01373407612619
+          ],
+          [
+            11.586147141071304,
+            48.01419679031312
+          ],
+          [
+            11.58469187031103,
+            48.017123211136095
+          ],
+          [
+            11.583613891970087,
+            48.01946062302713
+          ],
+          [
+            11.582544896781986,
+            48.02180393730903
+          ],
+          [
+            11.58189810977742,
+            48.02334205493115
+          ],
+          [
+            11.581799295096165,
+            48.02377464224327
+          ],
+          [
+            11.581799295096165,
+            48.02429734706847
+          ],
+          [
+            11.581880143471736,
+            48.02466984612304
+          ],
+          [
+            11.58213167175129,
+            48.02527665333457
+          ],
+          [
+            11.582401166336526,
+            48.02569720859686
+          ],
+          [
+            11.583012020729726,
+            48.02634605855607
+          ],
+          [
+            11.591294487649309,
+            48.033687106616114
+          ],
+          [
+            11.593737905222115,
+            48.035903633246356
+          ],
+          [
+            11.606763476841847,
+            48.047513310967176
+          ],
+          [
+            11.607419246999253,
+            48.04825797077639
+          ],
+          [
+            11.607931286711203,
+            48.04897259385608
+          ],
+          [
+            11.608236713907804,
+            48.049483032842005
+          ],
+          [
+            11.609458422694205,
+            48.051873021025365
+          ],
+          [
+            11.61151556469484,
+            48.05631642281284
+          ],
+          [
+            11.611829975044282,
+            48.05734915857942
+          ],
+          [
+            11.6119647223369,
+            48.0580696596373
+          ],
+          [
+            11.612081503323834,
+            48.05992490345138
+          ],
+          [
+            11.612180318005088,
+            48.06069940293216
+          ],
+          [
+            11.612386930520437,
+            48.06522008598986
+          ],
+          [
+            11.612476762048848,
+            48.067381228450664
+          ],
+          [
+            11.6124228631318,
+            48.06789748794374
+          ],
+          [
+            11.609467405847047,
+            48.07957797539674
+          ],
+          [
+            11.606484999103769,
+            48.09135181554901
+          ],
+          [
+            11.6063412687,
+            48.0918318334
+          ],
+          [
+            11.6058202458,
+            48.0931698595
+          ],
+          [
+            11.6052902398,
+            48.0942738548
+          ],
+          [
+            11.604302093,
+            48.0960137993
+          ],
+          [
+            11.6041403962,
+            48.0964997733
+          ],
+          [
+            11.6016790123,
+            48.1003514045
+          ],
+          [
+            11.6002417079,
+            48.102445083
+          ],
+          [
+            11.5998823818,
+            48.1030749696
+          ],
+          [
+            11.5989750833,
+            48.1050365669
+          ],
+          [
+            11.5986427067,
+            48.1056364288
+          ],
+          [
+            11.5971155707,
+            48.109085499
+          ],
+          [
+            11.5960825081,
+            48.1111308382
+          ],
+          [
+            11.5955794516,
+            48.1122764325
+          ],
+          [
+            11.5954986032,
+            48.112552331
+          ],
+          [
+            11.5952740244,
+            48.1137638677
+          ],
+          [
+            11.5951572434,
+            48.1151193154
+          ],
+          [
+            11.595193176,
+            48.1159349659
+          ],
+          [
+            11.5953009738,
+            48.1165406979
+          ],
+          [
+            11.5957770809,
+            48.1185617521
+          ],
+          [
+            11.5959387777,
+            48.1192034351
+          ],
+          [
+            11.5961453902,
+            48.1200236474
+          ]
+        ]
+      }
+    }
+  ]
+};
+        // ============================================================
+
+        // --- CONFIG ---
+        const API_KEY = "5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"; 
+        const BBOX = "1269000 6087000 1350000 6200000 5 tenant=sbm";
+
+        // --- MAP SETUP ---
+        console.log("Creating map...");
+        var map = L.map('map', { zoomControl: false, zoomSnap: 0, zoomDelta: 0.1 }).setView([48.137, 11.575], 11);
+        console.log("Map created.");
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: 'CARTO',
+            maxZoom: 20
+        }).addTo(map);
+
+        // --- LOAD ROUTES ---
+        if (ROUTES_DATA && ROUTES_DATA.features && ROUTES_DATA.features.length > 0) {
+            console.log("Loading routes...");
+            L.geoJSON(ROUTES_DATA, {
+                style: function(feature) {
+                    return {
+                        color: feature.properties.color || '#005293', // S-Bahn Blue
+                        weight: 3,
+                        opacity: 0.7
+                    };
+                }
+            }).addTo(map);
+            console.log("Routes loaded.");
+        }
+
+        var stationLayer = L.layerGroup().addTo(map);
+        var trainLayer = L.layerGroup().addTo(map);
+        var markers = {};
+        var trainData = {};
+
+        function mercatorToLatLon(x, y) {
+            var lon = (x / 20037508.34) * 180;
+            var lat = (y / 20037508.34) * 180;
+            lat = 180 / Math.PI * (2 * Math.atan(Math.exp(lat * Math.PI / 180)) - Math.PI / 2);
+            return [lat, lon];
+        }
+
+        const ws = new WebSocket(`wss://api.geops.io/realtime-ws/v1/?key=${API_KEY}`);
+
+        ws.onopen = function() {
+            console.log("WS Connected");
+            ws.send("BUFFER 100 100");
+            ws.send("BBOX " + BBOX);
+            ws.send("GET station");
+        };
+
+        ws.onmessage = function(event) {
+            try {
+                var msg = JSON.parse(event.data);
+                var items = [];
+                var source = msg.source;
+                if (source === 'list') items = msg.content;
+                else if (source === 'trajectory' || source === 'station') items = [msg];
+                else if (source === 'buffer') items = msg.content;
+                if (!items) return;
+
+                items.forEach(item => {
+                    if (typeof item === 'string') return;
+                    var content = item.content || item;
+                    var props = content.properties || {};
+                    var geom = content.geometry || {};
+                    var type = item.source || source;
+
+                    if (type === 'station') {
+                        var mot = props.mot || {};
+                        if (!mot.rail && !mot.subway) return;
+                        var name = props.name || "Station";
+                        var coords = geom.coordinates;
+                        if (coords && coords.length === 2) {
+                            var ll = mercatorToLatLon(coords[0], coords[1]);
+                            L.circleMarker(ll, {
+                                radius: 4, fillColor: "white", color: "#005293",
+                                weight: 2, opacity: 1, fillOpacity: 1
+                            }).bindPopup("<b>" + name + "</b>").addTo(stationLayer);
+                        }
+                    }
+
+                    if (type === 'trajectory') {
+                        var id = props.train_id;
+                        var color = props.line ? props.line.color : '#FF0000';
+                        var textColor = props.line ? props.line.text_color : '#FFFFFF';
+                        var lineName = props.line ? props.line.name : '?';
+                        var state = props.state || 'DRIVING';
+                        var coordsPoly = geom.coordinates || [];
+                        var intervals = props.time_intervals || [];
+                        
+                        var lat = 0, lon = 0, nextLat = null, nextLon = null;
+                        var startTs = 0, nextTs = null;
+                        var heading = null;
+
+                        if (coordsPoly.length >= 2) {
+                            var p0 = coordsPoly[0], p1 = coordsPoly[1];
+                            var dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+                            if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+                                var theta = Math.atan2(dy, dx);
+                                heading = (450 - (theta * 180 / Math.PI)) % 360;
+                            }
+                            var ll0 = mercatorToLatLon(p0[0], p0[1]);
+                            lat = ll0[0]; lon = ll0[1];
+                            var ll1 = mercatorToLatLon(p1[0], p1[1]);
+                            nextLat = ll1[0]; nextLon = ll1[1];
+                        } else if (props.raw_coordinates) {
+                            lon = props.raw_coordinates[0];
+                            lat = props.raw_coordinates[1];
+                        }
+
+                        if (intervals.length >= 2) {
+                            startTs = intervals[0][0] / 1000.0;
+                            nextTs = intervals[1][0] / 1000.0;
+                        } else startTs = (props.timestamp || Date.now()) / 1000.0;
+
+                        if (lat !== 0) {
+                            trainData[id] = {
+                                id: lineName, lat: lat, lon: lon,
+                                next_lat: nextLat, next_lon: nextLon,
+                                start_ts: startTs, next_ts: nextTs,
+                                color: color, text_color: textColor,
+                                state: state, heading: heading,
+                                ts: Date.now() / 1000
+                            };
+                            updateMarker(id);
+                        }
+                    }
+                });
+            } catch(e) { console.error("Parse Error:", e); }
+        };
+
+        function updateMarker(id) {
+            var t = trainData[id];
+            var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
+            var arrowStyle = (t.heading !== null) ? `transform: rotate(${t.heading}deg); color: ${t.color};` : 'display: none;';
+            var html = `<div class="icon-container"><div class="train-circle ${isBoarding ? 'boarding' : 'driving'}" style="background-color: ${t.color}; color: ${t.text_color};">${t.id}</div><div class="arrow-pointer" style="${arrowStyle}"></div></div>`;
+            var icon = L.divIcon({ className: 'custom-train-icon', html: html, iconSize: [30, 30], iconAnchor: [15, 15] });
+            if (!markers[id]) markers[id] = L.marker([t.lat, t.lon], {icon: icon}).addTo(trainLayer);
+            else markers[id].setIcon(icon);
+        }
+
+        function animate() {
+            var now = Date.now() / 1000; 
+            Object.keys(trainData).forEach(id => {
+                var t = trainData[id];
+                var marker = markers[id];
+                if (now - t.ts > 60) {
+                    trainLayer.removeLayer(marker); delete markers[id]; delete trainData[id]; return;
+                }
+                var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
+                if (!isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {
+                    var total = t.next_ts - t.start_ts;
+                    var elapsed = now - t.start_ts;
+                    if (total > 0) {
+                        var p = Math.max(0, Math.min(elapsed / total, 1.05));
+                        marker.setLatLng([t.lat + (t.next_lat - t.lat) * p, t.lon + (t.next_lon - t.lon) * p]);
+                    } else marker.setLatLng([t.next_lat, t.next_lon]);
+                } else marker.setLatLng([t.lat, t.lon]);
+            });
+            requestAnimationFrame(animate);
+        }
+        requestAnimationFrame(animate);
+
+    } catch(err) {
+        alert("Critical Error: " + err.message);
+        console.error(err);
+    }
+    </script>
+</body>
+</html>
