@@ -10,17 +10,27 @@ counter = 0
 def on_message(ws, msg):
     global counter
     data = json.loads(msg)
-    print(json.dumps(data, indent=4)[:500])
-    if counter > 1000:
-        sys.exit()
-    else:
-        counter += 1
-    # print(f"[{time.strftime('%H:%M:%S')}] {data.get('source', 'unknown')}")
-    if data.get('source') == 'trajectory':
-        line = data['content']['properties'].get('line', {}).get('name', '?')
-        train_id = data['content']['properties']
-        # coords_len = len(data['content']['geometry']['coordinates'])
-    #     print(f"  🚂 {line}: {coords_len} GPS points!")
+    source = data.get("source", "")
+    content = data.get("content")
+
+    if source == "buffer":
+        # Buffer contains a batch of updates
+        for item in content or []:
+            if not item:
+                continue
+            trajectory = item.get("content")
+            properties = trajectory.get("properties")
+            line = properties.get('line', {}).get('name', '?')
+            train_id = properties.get('train_id', 'noid')
+            # coords_len = len(data['content']['geometry']['coordinates'])
+            print(f"\"{train_id}\", #{line}")
+            # print(json.dumps(trajectory, indent=4)[:1000])
+    # if counter > 2:
+    #     sys.exit()
+    # else:
+    #     counter += 1
+    
+        
 
 def on_error(ws, error):
     print(f"❌ {error}")
@@ -44,5 +54,5 @@ def on_open(ws):
             time.sleep(25)
     threading.Thread(target=ping, daemon=True).start()
 
-ws = websocket.WebSocketApp(ws_url, on_message=on_message, on_open=on_open, on_error=on_error)
+ws = websocket.WebSocketApp(ws_url, on_message=on_message, on_open=on_open, on_error=None)
 ws.run_forever(ping_interval=30)
