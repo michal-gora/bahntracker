@@ -55,8 +55,13 @@ def run_geops_client():
                 text_color = line_info.get('text_color', '#FFFFFF')
                 state = props.get('state', 'DRIVING') 
 
+                # --- 1. COORDINATE & HEADING CALCULATION ---
                 heading = None 
                 coords_poly = geom.get('coordinates', [])
+                
+                lat, lon = 0, 0
+                next_lat, next_lon = None, None
+
                 if coords_poly and len(coords_poly) >= 2:
                     p0 = coords_poly[0]
                     p1 = coords_poly[1]
@@ -65,8 +70,10 @@ def run_geops_client():
                     if abs(dx) > 0.1 or abs(dy) > 0.1:
                         theta = math.atan2(dy, dx)
                         heading = (450 - math.degrees(theta)) % 360
+                    
+                    next_lat = (2 * math.atan(math.exp((p1[1] / 20037508.34) * 180 * math.pi / 180)) - math.pi / 2) * 180 / math.pi
+                    next_lon = (p1[0] / 20037508.34) * 180
 
-                lat, lon = 0, 0
                 if 'raw_coordinates' in props:
                     lon, lat = props['raw_coordinates']
                 elif coords_poly:
@@ -74,7 +81,18 @@ def run_geops_client():
                     lat = (2 * math.atan(math.exp((y / 20037508.34) * 180 * math.pi / 180)) - math.pi / 2) * 180 / math.pi
                     lon = (x / 20037508.34) * 180
 
-                if lat != 0 and lon != 0:
+                # --- 2. TIME CALCULATION ---
+                intervals = props.get('time_intervals', [])
+                start_ts = props.get('timestamp', time.time() * 1000) / 1000.0
+                next_ts = None
+
+                if intervals and len(intervals) >= 2:
+                    try:
+                        start_ts = intervals[0][0] / 1000.0
+                        next_ts = intervals[1][0] / 1000.0
+                    except IndexError: pass
+
+                if lat != 0:
                     with DATA_LOCK:
                         if heading is None:
                             prev = LIVE_DATA.get(train_id)
@@ -84,6 +102,10 @@ def run_geops_client():
                             "id": line_name, 
                             "lat": lat, 
                             "lon": lon, 
+                            "next_lat": next_lat,
+                            "next_lon": next_lon,
+                            "start_ts": start_ts,
+                            "next_ts": next_ts,
                             "color": bg_color,
                             "text_color": text_color,
                             "state": state,
@@ -100,6 +122,7 @@ def run_geops_client():
 
 threading.Thread(target=run_geops_client, daemon=True).start()
 
+
 # --- FLASK ---
 @app.route('/')
 def map_view():
@@ -115,30 +138,22 @@ def map_view():
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                        
                         folium.GeoJson(
                             data, 
-                            # Dynamic styling based on feature properties
                             style_function=lambda feature: {
-                                'color': feature['properties'].get('color', 'blue'), # Fallback to blue
-                                'weight': 3,
-                                'opacity': 0.7
-                            },
-                            # Optional: Show line name on hover
-                            tooltip=folium.GeoJsonTooltip(fields=['name'], labels=False) if 'name' in str(data) else None
+                                'color': feature['properties'].get('color', 'blue'),
+                                'weight': 3, 'opacity': 0.7
+                            }
                         ).add_to(route_layer)
-                except Exception as e:
-                    print(f"Error loading {filename}: {e}")
+                except Exception: pass
     
     route_layer.add_to(m)
 
-    # ... [Keep the train_layer logic and CSS exactly as you had it] ...
     train_layer = folium.FeatureGroup(name="Live Trains")
     train_layer.add_to(m)
     map_var = m.get_name()
     layer_var = train_layer.get_name()
 
-    # [Keep the CSS style block here]
     m.get_root().html.add_child(folium.Element("""
         <style>
         .icon-container {
@@ -150,7 +165,7 @@ def map_view():
             display: flex; align-items: center; justify-content: center;
             font-family: sans-serif; font-weight: bold; font-size: 10px;
             color: white; z-index: 3; box-sizing: border-box;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.5); transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.5);
         }
         .driving { border-radius: 50%; border: 2px solid white; }
         .boarding { border-radius: 50%; border: 3px double white; transform: scale(1.0); }
@@ -173,25 +188,32 @@ def map_view():
         </style>
     """))
 
-    # [Keep the Javascript block here]
     m.get_root().html.add_child(folium.Element(f"""
         <script>
         document.addEventListener("DOMContentLoaded", function() {{
             setTimeout(function() {{
                 var myMap = {map_var};
                 var liveLayer = {layer_var};
+                var markers = {{}}; 
+                var trainData = {{}}; 
+
+                // TWEAK THIS: Positive moves trains ahead, Negative delays them
+                var TIME_OFFSET = 0.0; 
+
                 function update() {{
                     fetch('/api/trains').then(r=>r.json()).then(data => {{
-                        liveLayer.clearLayers();
+                        var activeIds = new Set();
                         data.forEach(t => {{
+                            activeIds.add(t.id);
+                            trainData[t.id] = t;
+                            
                             var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
                             var stateClass = isBoarding ? 'boarding' : 'driving';
                             var arrowStyle = (t.heading !== null) 
                                 ? `transform: rotate(${{t.heading}}deg); color: ${{t.color}};` 
                                 : 'display: none;';
-                            var icon = L.divIcon({{
-                                className: 'custom-train-icon', 
-                                html: `
+                            
+                            var iconHtml = `
                                 <div class="icon-container">
                                     <div class="train-circle ${{stateClass}}" style="
                                         background-color: ${{t.color}}; 
@@ -199,17 +221,63 @@ def map_view():
                                         ${{t.id}}
                                     </div>
                                     <div class="arrow-pointer" style="${{arrowStyle}}"></div>
-                                </div>`,
-                                iconSize: [30, 30],
-                                iconAnchor: [15, 15]
-                            }});
-                            L.marker([t.lat, t.lon], {{icon: icon}})
-                             .bindPopup(`Line: <b>${{t.id}}</b><br>State: ${{t.state}}`)
-                             .addTo(liveLayer);
+                                </div>`;
+
+                            if (!markers[t.id]) {{
+                                markers[t.id] = L.marker([t.lat, t.lon], {{
+                                    icon: L.divIcon({{ className: 'custom-train-icon', html: iconHtml, iconSize: [30, 30], iconAnchor: [15, 15] }})
+                                }}).addTo(liveLayer);
+                            }} else {{
+                                markers[t.id].setIcon(L.divIcon({{ className: 'custom-train-icon', html: iconHtml, iconSize: [30, 30], iconAnchor: [15, 15] }}));
+                            }}
+                        }});
+                        
+                        Object.keys(markers).forEach(id => {{
+                            if (!activeIds.has(id)) {{ 
+                                liveLayer.removeLayer(markers[id]); 
+                                delete markers[id]; 
+                                delete trainData[id];
+                            }}
                         }});
                     }});
                 }}
-                setInterval(update, 1000);
+
+                function animate() {{
+                    var now = (Date.now() / 1000) + TIME_OFFSET;
+                    
+                    Object.keys(trainData).forEach(id => {{
+                        var t = trainData[id];
+                        var marker = markers[id];
+                        
+                        // CHECK: If boarding/stopping, do not interpolate
+                        var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
+
+                        if (!isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {{
+                            var totalDuration = t.next_ts - t.start_ts;
+                            var elapsed = now - t.start_ts;
+                            
+                            if (totalDuration > 0) {{
+                                var p = elapsed / totalDuration;
+                                
+                                // Clamp with slight overshoot allowed (1.05) to prevent stutter
+                                p = Math.max(0, Math.min(p, 1.05));
+                                
+                                var curLat = t.lat + (t.next_lat - t.lat) * p;
+                                var curLon = t.lon + (t.next_lon - t.lon) * p;
+                                marker.setLatLng([curLat, curLon]);
+                            }} else {{
+                                marker.setLatLng([t.next_lat, t.next_lon]);
+                            }}
+                        }} else {{
+                            // Fallback for STATIONARY trains (Boarding or missing data)
+                            marker.setLatLng([t.lat, t.lon]);
+                        }}
+                    }});
+                    requestAnimationFrame(animate);
+                }}
+
+                setInterval(update, 1500);
+                requestAnimationFrame(animate);
             }}, 1000);
         }});
         </script>
