@@ -8,6 +8,7 @@ ws_url = f"wss://api.geops.io/realtime-ws/v1/?key={API_KEY}"
 
 def on_message(ws, msg):
     data = json.loads(msg)
+    print(json.dumps(data, indent=4))
     print(f"[{time.strftime('%H:%M:%S')}] {data.get('source', 'unknown')}")
     if data.get('source') == 'trajectory':
         line = data['content']['properties'].get('line', {}).get('name', '?')
@@ -24,10 +25,10 @@ def on_open(ws):
     time.sleep(1)
     
     # Zurich from docs (should work)
-    ws.send("BBOX 837468 5963148 915383 6033720 11")
+    # ws.send("BBOX 837468 5963148 915383 6033720 11")
     
     # Munich wide
-    ws.send("BBOX 1100000 6300000 1200000 6400000 9 mots=rail")
+    ws.send("BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm")
     
     # Ping loop
     def ping():

@@ -108,8 +108,8 @@ async def get_trains(ws):
 async def main():
     async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
         try:
-            uic = await get_station_uic(ws, "Marienplatz")
-            trains = await get_incoming_trains(ws, uic, 10)
+            # uic = await get_station_uic(ws, "Marienplatz")
+            # trains = await get_incoming_trains(ws, uic, 10)
             # await get_trains(ws)
 
             # await ws.send("BUFFER 100 100")

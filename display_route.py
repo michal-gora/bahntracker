@@ -1,6 +1,7 @@
 import asyncio
 import json
 import websockets
+import sys
 from pyproj import Transformer
 
 WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
@@ -8,7 +9,8 @@ WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c
 # TRAIN_ID = "sbm_140265128772992"  # Train to Leuchtenbergring S1
 # TRAIN_ID = "sbm_140265161331808" # S6 Tutzing
 # TRAIN_ID = "sbm_140265140401920" # S8 Herrsching
-TRAIN_ID = "sbm_140265243803856" # S3 Maisach
+# TRAIN_ID = "sbm_140265243803856" # S3 Maisach
+TRAIN_ID = "sbm_140265127395680"
 LINE_NAME = "S3"
 
 # Create transformer from EPSG:3857 (Web Mercator) to WGS84 (lat/lon)
@@ -26,7 +28,7 @@ async def display_route():
             if isinstance(msg, str):
                 try:
                     data = json.loads(msg)
-                    
+                    print(json.dumps(data, indent=4))
                     if data.get('source', '').startswith('full_trajectory_'):
                         content = data.get('content')
                         
@@ -109,22 +111,22 @@ async def display_route():
                                 }]
                             }
                             
-                            geojson_location = "routes_geojson"
-                            csv_location = "routes_csv"
+                            # geojson_location = "routes_geojson"
+                            # csv_location = "routes_csv"
 
-                            with open(f"{geojson_location}/route_{LINE_NAME}.geojson", 'w') as f:
-                                json.dump(geojson, f, indent=2)
+                            # with open(f"{geojson_location}/route_{LINE_NAME}.geojson", 'w') as f:
+                            #     json.dump(geojson, f, indent=2)
                             
-                            print("✅ Saved to route.geojson")
-                            print("   You can open this file at: https://geojson.io/")
+                            # print("✅ Saved to route.geojson")
+                            # print("   You can open this file at: https://geojson.io/")
                             
-                            # Also save CSV
-                            with open(f"{csv_location}/route_{LINE_NAME}.csv", 'w') as f:
-                                f.write("latitude,longitude\n")
-                                for lat, lon in latlon_coords:
-                                    f.write(f"{lat:.6f},{lon:.6f}\n")
+                            # # Also save CSV
+                            # with open(f"{csv_location}/route_{LINE_NAME}.csv", 'w') as f:
+                            #     f.write("latitude,longitude\n")
+                            #     for lat, lon in latlon_coords:
+                            #         f.write(f"{lat:.6f},{lon:.6f}\n")
                             
-                            print("✅ Saved to route.csv")
+                            # print("✅ Saved to route.csv")
                             
                         return
                         
