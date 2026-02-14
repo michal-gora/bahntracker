@@ -5,6 +5,7 @@ import threading
 import time
 import websocket
 import math
+import os
 
 app = Flask(__name__)
 ROUTES_FILE = 'route.geojson'
@@ -104,94 +105,90 @@ threading.Thread(target=run_geops_client, daemon=True).start()
 def map_view():
     m = folium.Map(location=[48.137, 11.575], zoom_start=10)
     
-    try:
-        with open(ROUTES_FILE, 'r') as f:
-            folium.GeoJson(json.load(f), name='S-Bahn Routes', style_function=lambda x: {'color': 'blue'}).add_to(m)
-    except: pass
+    routes_dir = 'routes_geojson'
+    route_layer = folium.FeatureGroup(name='S-Bahn Network')
+    
+    if os.path.exists(routes_dir):
+        for filename in os.listdir(routes_dir):
+            if filename.endswith('.geojson'):
+                file_path = os.path.join(routes_dir, filename)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        
+                        folium.GeoJson(
+                            data, 
+                            # Dynamic styling based on feature properties
+                            style_function=lambda feature: {
+                                'color': feature['properties'].get('color', 'blue'), # Fallback to blue
+                                'weight': 3,
+                                'opacity': 0.7
+                            },
+                            # Optional: Show line name on hover
+                            tooltip=folium.GeoJsonTooltip(fields=['name'], labels=False) if 'name' in str(data) else None
+                        ).add_to(route_layer)
+                except Exception as e:
+                    print(f"Error loading {filename}: {e}")
+    
+    route_layer.add_to(m)
 
+    # ... [Keep the train_layer logic and CSS exactly as you had it] ...
     train_layer = folium.FeatureGroup(name="Live Trains")
     train_layer.add_to(m)
     map_var = m.get_name()
     layer_var = train_layer.get_name()
 
+    # [Keep the CSS style block here]
     m.get_root().html.add_child(folium.Element("""
         <style>
         .icon-container {
-            position: relative;
-            width: 30px; height: 30px;
+            position: relative; width: 30px; height: 30px;
             display: flex; justify-content: center; align-items: center;
         }
-
         .train-circle {
-            width: 24px; height: 24px;
-            border-radius: 50%;
+            width: 24px; height: 24px; border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             font-family: sans-serif; font-weight: bold; font-size: 10px;
-            color: white;
-            z-index: 3; /* Middle layer */
-            box-sizing: border-box;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.5);
-            transition: all 0.3s ease;
+            color: white; z-index: 3; box-sizing: border-box;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.5); transition: all 0.3s ease;
         }
-        
         .driving { border-radius: 50%; border: 2px solid white; }
         .boarding { border-radius: 50%; border: 3px double white; transform: scale(1.0); }
-        
         .arrow-pointer {
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            z-index: 5; /* Top layer */
-            pointer-events: none;
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 5; pointer-events: none;
         }
-        
-        /* THE WHITE BORDER TRIANGLE */
         .arrow-pointer::before {
-            content: '';
-            position: absolute;
-            top: -6px; /* Higher to encompass inner triangle */
-            left: 50%;
-            margin-left: -7px;
-            width: 0; height: 0;
-            border-left: 7px solid transparent;
-            border-right: 7px solid transparent;
-            border-bottom: 11px solid white; 
+            content: ''; position: absolute; top: -6px; left: 50%; margin-left: -7px;
+            width: 0; height: 0; border-left: 7px solid transparent;
+            border-right: 7px solid transparent; border-bottom: 11px solid white; 
             transform-origin: center 21px;
         }
-
-        /* THE COLORED INNER TRIANGLE */
         .arrow-pointer::after {
-            content: '';
-            position: absolute;
-            top: -2px; /* Overlaps circle border to hide seam */
-            left: 50%;
-            margin-left: -5px;
-            width: 0; height: 0;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-bottom: 9px solid; /* Color inherited from inline style */
+            content: ''; position: absolute; top: -2px; left: 50%; margin-left: -5px;
+            width: 0; height: 0; border-left: 5px solid transparent;
+            border-right: 5px solid transparent; border-bottom: 9px solid; 
             transform-origin: center 18px;
         }
         </style>
     """))
 
+    # [Keep the Javascript block here]
     m.get_root().html.add_child(folium.Element(f"""
         <script>
         document.addEventListener("DOMContentLoaded", function() {{
             setTimeout(function() {{
                 var myMap = {map_var};
                 var liveLayer = {layer_var};
-
                 function update() {{
                     fetch('/api/trains').then(r=>r.json()).then(data => {{
                         liveLayer.clearLayers();
                         data.forEach(t => {{
                             var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
                             var stateClass = isBoarding ? 'boarding' : 'driving';
-                            
                             var arrowStyle = (t.heading !== null) 
                                 ? `transform: rotate(${{t.heading}}deg); color: ${{t.color}};` 
                                 : 'display: none;';
-                            
                             var icon = L.divIcon({{
                                 className: 'custom-train-icon', 
                                 html: `
@@ -206,7 +203,6 @@ def map_view():
                                 iconSize: [30, 30],
                                 iconAnchor: [15, 15]
                             }});
-                            
                             L.marker([t.lat, t.lon], {{icon: icon}})
                              .bindPopup(`Line: <b>${{t.id}}</b><br>State: ${{t.state}}`)
                              .addTo(liveLayer);

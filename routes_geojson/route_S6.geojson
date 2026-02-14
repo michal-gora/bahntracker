@@ -1229,7 +1229,8 @@
         ]
       },
       "properties": {
-        "name": "S6"
+        "name": "S6",
+        "color": "#00a76c"
       }
     }
   ]
