@@ -9,9 +9,11 @@ import math
 app = Flask(__name__)
 ROUTES_FILE = 'route.geojson'
 
+# --- GLOBAL SHARED STATE ---
 LIVE_DATA = {}
 DATA_LOCK = threading.Lock()
 
+# --- GEOPS WORKER ---
 def run_geops_client():
     API_KEY = "5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
     WS_URL = f"wss://api.geops.io/realtime-ws/v1/?key={API_KEY}"
@@ -52,21 +54,17 @@ def run_geops_client():
                 text_color = line_info.get('text_color', '#FFFFFF')
                 state = props.get('state', 'DRIVING') 
 
-                # 1. Calculate Heading
-                heading = None # Default is None (Unknown)
+                heading = None 
                 coords_poly = geom.get('coordinates', [])
-                
                 if coords_poly and len(coords_poly) >= 2:
                     p0 = coords_poly[0]
                     p1 = coords_poly[1]
                     dx = p1[0] - p0[0]
                     dy = p1[1] - p0[1]
-                    
                     if abs(dx) > 0.1 or abs(dy) > 0.1:
                         theta = math.atan2(dy, dx)
                         heading = (450 - math.degrees(theta)) % 360
 
-                # 2. Get Position
                 lat, lon = 0, 0
                 if 'raw_coordinates' in props:
                     lon, lat = props['raw_coordinates']
@@ -75,14 +73,11 @@ def run_geops_client():
                     lat = (2 * math.atan(math.exp((y / 20037508.34) * 180 * math.pi / 180)) - math.pi / 2) * 180 / math.pi
                     lon = (x / 20037508.34) * 180
 
-                # 3. Store
                 if lat != 0 and lon != 0:
                     with DATA_LOCK:
-                        # Fallback to old heading if calc failed
                         if heading is None:
                             prev = LIVE_DATA.get(train_id)
-                            if prev:
-                                heading = prev.get('heading') # Keep old (might be None or Valid)
+                            if prev: heading = prev.get('heading')
 
                         LIVE_DATA[train_id] = {
                             "id": line_name, 
@@ -91,7 +86,7 @@ def run_geops_client():
                             "color": bg_color,
                             "text_color": text_color,
                             "state": state,
-                            "heading": heading, # Can be None
+                            "heading": heading,
                             "ts": time.time()
                         }
         except: pass
@@ -103,7 +98,6 @@ def run_geops_client():
         except: time.sleep(5)
 
 threading.Thread(target=run_geops_client, daemon=True).start()
-
 
 # --- FLASK ---
 @app.route('/')
@@ -122,19 +116,60 @@ def map_view():
 
     m.get_root().html.add_child(folium.Element("""
         <style>
-        .train-icon {
+        .icon-container {
+            position: relative;
+            width: 30px; height: 30px;
+            display: flex; justify-content: center; align-items: center;
+        }
+
+        .train-circle {
+            width: 24px; height: 24px;
+            border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             font-family: sans-serif; font-weight: bold; font-size: 10px;
-            color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.5);
-            transition: all 0.3s ease; position: relative;
+            color: white;
+            z-index: 3; /* Middle layer */
+            box-sizing: border-box;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+            transition: all 0.3s ease;
         }
+        
         .driving { border-radius: 50%; border: 2px solid white; }
-        .boarding { border-radius: 6px; border: 3px double white; transform: scale(1.1); z-index: 1000 !important; }
+        .boarding { border-radius: 50%; border: 3px double white; transform: scale(1.0); }
+        
         .arrow-pointer {
-            position: absolute; top: -5px; left: 50%; margin-left: -4px;
-            width: 0; height: 0; border-left: 4px solid transparent;
-            border-right: 4px solid transparent; border-bottom: 6px solid black;
-            transform-origin: center 17px;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 5; /* Top layer */
+            pointer-events: none;
+        }
+        
+        /* THE WHITE BORDER TRIANGLE */
+        .arrow-pointer::before {
+            content: '';
+            position: absolute;
+            top: -6px; /* Higher to encompass inner triangle */
+            left: 50%;
+            margin-left: -7px;
+            width: 0; height: 0;
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-bottom: 11px solid white; 
+            transform-origin: center 21px;
+        }
+
+        /* THE COLORED INNER TRIANGLE */
+        .arrow-pointer::after {
+            content: '';
+            position: absolute;
+            top: -2px; /* Overlaps circle border to hide seam */
+            left: 50%;
+            margin-left: -5px;
+            width: 0; height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-bottom: 9px solid; /* Color inherited from inline style */
+            transform-origin: center 18px;
         }
         </style>
     """))
@@ -153,23 +188,25 @@ def map_view():
                             var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
                             var stateClass = isBoarding ? 'boarding' : 'driving';
                             
-                            // Only show arrow if driving AND heading is known (not null)
-                            var arrowHtml = (!isBoarding && t.heading !== null) 
-                                ? `<div class="arrow-pointer" style="transform: rotate(${{t.heading}}deg);"></div>` 
-                                : '';
+                            var arrowStyle = (t.heading !== null) 
+                                ? `transform: rotate(${{t.heading}}deg); color: ${{t.color}};` 
+                                : 'display: none;';
                             
                             var icon = L.divIcon({{
                                 className: 'custom-train-icon', 
-                                html: `<div class="train-icon ${{stateClass}}" style="
-                                    background-color: ${{t.color}}; 
-                                    color: ${{t.text_color}};
-                                    width: 24px; height: 24px;">
-                                    ${{t.id}}
-                                    ${{arrowHtml}}
+                                html: `
+                                <div class="icon-container">
+                                    <div class="train-circle ${{stateClass}}" style="
+                                        background-color: ${{t.color}}; 
+                                        color: ${{t.text_color}};">
+                                        ${{t.id}}
+                                    </div>
+                                    <div class="arrow-pointer" style="${{arrowStyle}}"></div>
                                 </div>`,
-                                iconSize: [24, 24],
-                                iconAnchor: [12, 12]
+                                iconSize: [30, 30],
+                                iconAnchor: [15, 15]
                             }});
+                            
                             L.marker([t.lat, t.lon], {{icon: icon}})
                              .bindPopup(`Line: <b>${{t.id}}</b><br>State: ${{t.state}}`)
                              .addTo(liveLayer);
