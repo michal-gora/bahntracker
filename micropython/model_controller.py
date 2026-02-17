@@ -44,7 +44,7 @@ def set_reverser(reversed : bool):
 
             
 def start_socket_client():
-    IP_ADDRESS = "192.168.53.60"
+    IP_ADDRESS = "192.168.178.26"
     PORT = 8080
     RECONNECT_DELAY = 5  # seconds
     PING_INTERVAL = 3  # seconds - how often to send PING

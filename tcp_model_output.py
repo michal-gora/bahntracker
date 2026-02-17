@@ -61,7 +61,9 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info("peername")
         print(f"📡 TCP connection from {peer}")
-        last_seen = asyncio.get_running_loop().time()
+        
+        PING_TIMEOUT = 15  # seconds - if no PING received, close connection
+        last_ping_received = asyncio.get_running_loop().time()
 
         try:
             # First message must be HELLO:MODEL
@@ -83,24 +85,35 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
 
             # Read loop — model sends HALL / PING
             while True:
-                line = await reader.readline()
-                if not line:
-                    # Connection closed
-                    break
-                msg = line.decode().strip()
-                if not msg:
+                try:
+                    # Check watchdog timeout
+                    current_time = asyncio.get_running_loop().time()
+                    if current_time - last_ping_received > PING_TIMEOUT:
+                        print(f"⚠️  No PING received for {PING_TIMEOUT}s - closing connection")
+                        break
+                    
+                    line = await asyncio.wait_for(reader.readline(), timeout=1.0)
+                    if not line:
+                        # Connection closed
+                        break
+                    msg = line.decode().strip()
+                    if not msg:
+                        continue
+
+                    if msg == "HALL":
+                        print("🧲 HALL sensor triggered (from model via TCP)")
+                        state_machine.on_hall_sensor()
+                    elif msg == "PING":
+                        last_ping_received = current_time
+                        writer.write(b"PONG\n")
+                        await writer.drain()
+                        print("📤 Sent PONG")
+                    else:
+                        print(f"⚠️  Unknown message from model: {msg!r}")
+                        
+                except asyncio.TimeoutError:
+                    # No data received in 1s, continue to check watchdog
                     continue
-
-                last_seen = asyncio.get_running_loop().time()
-
-                if msg == "HALL":
-                    print("🧲 HALL sensor triggered (from model via TCP)")
-                    state_machine.on_hall_sensor()
-                elif msg == "PING":
-                    writer.write(b"PONG\n")
-                    await writer.drain()
-                else:
-                    print(f"⚠️  Unknown message from model: {msg!r}")
 
         except asyncio.TimeoutError:
             print("❌ Model client timed out during handshake")
