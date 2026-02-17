@@ -14,7 +14,7 @@ import asyncio
 from outputs import ModelOutput
 
 
-MODEL_TCP_PORT = 8766
+MODEL_TCP_PORT = 8080
 
 
 class TcpModelOutput(ModelOutput):
