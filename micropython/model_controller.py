@@ -23,7 +23,14 @@ RECONNECT_DELAY = 5    # seconds - wait before reconnecting
 LED_PIN = "P5_3"
 PWM_PIN = "P9_7"
 REVERSER_PIN = "P9_6"
+HALL_PIN = "P9_0"
+
+# Hall sensor settings
+HALL_DEBOUNCE_MS = 200  # milliseconds - ignore triggers within this time
 # ============================================================
+
+# Global state
+hall_triggered = False
 
 is_led_on = True
 led_pin = LED_PIN
@@ -61,8 +68,18 @@ def set_reverser(reversed : bool):
     global reverser
     reverser.value(reversed)
 
+def hall_interrupt(pin):
+    """
+    IRQ handler for hall effect sensor.
+    Sets a flag that the main loop will process.
+    """
+    global hall_triggered
+    hall_triggered = True
+
             
 def start_socket_client():
+    global hall_triggered
+    
     s = None
     last_ping_sent = 0
     waiting_for_pong = False
@@ -78,7 +95,7 @@ def start_socket_client():
                 s.connect((SERVER_IP, SERVER_PORT))
                 s.setblocking(False)  # Set non-blocking after connect
                 
-                print(f"✓ Connected to server at {SERVER_IP}:{SERVER_PORT}")
+                print(f"Connected to server at {SERVER_IP}:{SERVER_PORT}")
                 
                 # Send HELLO handshake
                 s.write(b"HELLO:MODEL\n")
@@ -89,7 +106,7 @@ def start_socket_client():
                 waiting_for_pong = False
                 
             except OSError as e:
-                print(f"✗ Connection failed: {e}")
+                print(f"Connection failed: {e}")
                 if s:
                     try:
                         s.close()
@@ -102,6 +119,16 @@ def start_socket_client():
         
         # Main communication loop
         try:
+            # Check if hall sensor was triggered (from IRQ)
+            if hall_triggered:
+                hall_triggered = False  # Reset flag
+                try:
+                    s.write(b"HALL\n")
+                    print("Sent HALL")
+                except OSError as e:
+                    print(f"Failed to send HALL: {e}")
+                    raise
+            
             # Watchdog: Check if we need to send PING
             current_time = time.time()
             if current_time - last_ping_sent >= PING_INTERVAL:
@@ -109,14 +136,14 @@ def start_socket_client():
                     s.write(b"PING\n")
                     last_ping_sent = current_time
                     waiting_for_pong = True
-                    print("→ Sent PING")
+                    print("Sent PING")
                 except OSError as e:
-                    print(f"✗ Failed to send PING: {e}")
+                    print(f"Failed to send PING: {e}")
                     raise
             
             # Watchdog: Check if we're waiting for PONG and it's overdue
             if waiting_for_pong and (current_time - last_ping_sent > PONG_TIMEOUT):
-                print(f"✗ No PONG received within {PONG_TIMEOUT}s after PING - reconnecting")
+                print(f"No PONG received within {PONG_TIMEOUT}s after PING - reconnecting")
                 try:
                     s.close()
                 except:
@@ -141,7 +168,7 @@ def start_socket_client():
                     # Try another read to confirm
                     test = s.recv(1)
                     if test == b"":
-                        print("✗ Server closed connection - reconnecting")
+                        print("Server closed connection - reconnecting")
                         try:
                             s.close()
                         except:
@@ -152,7 +179,7 @@ def start_socket_client():
                 except OSError as e:
                     if e.args[0] != errno.EAGAIN:
                         # Connection is dead
-                        print("✗ Connection lost - reconnecting")
+                        print("Connection lost - reconnecting")
                         try:
                             s.close()
                         except:
@@ -176,7 +203,7 @@ def start_socket_client():
                 """
                 if line_str == "PONG":
                     waiting_for_pong = False
-                    print("← Received PONG")
+                    print("Received PONG")
                 elif line_str == "led_button;":
                     print("Received Button")
                     toggle_led()
@@ -199,7 +226,7 @@ def start_socket_client():
         except OSError as e:
             code = e.args[0]
             if code == errno.ECONNRESET:
-                print("✗ Connection reset/broken pipe – reconnecting")
+                print("Connection reset/broken pipe – reconnecting")
                 try:
                     s.close()
                 except:
@@ -211,7 +238,7 @@ def start_socket_client():
                 # No data this cycle — skip work
                 pass
             elif code == errno.ETIMEDOUT:
-                print("✗ Connection timed out - reconnecting")
+                print("Connection timed out - reconnecting")
                 try:
                     s.close()
                 except:
@@ -220,7 +247,7 @@ def start_socket_client():
                 time.sleep(RECONNECT_DELAY)
                 continue
             else:
-                print(f"✗ Socket error: {e} - reconnecting")
+                print(f"Socket error: {e} - reconnecting")
                 try:
                     s.close()
                 except:
@@ -236,6 +263,11 @@ def main():
     global led, is_led_on
     led_pwm = PWM(led_pin, freq=4, duty_u16=35555)
     reverser.value(False)
+    
+    # Set up hall effect sensor with interrupt
+    hall_sensor = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)
+    hall_sensor.irq(trigger=Pin.IRQ_FALLING, handler=hall_interrupt)
+    print(f"Hall sensor initialized on {HALL_PIN}")
 
     # Connect to WiFi with retry
     max_wifi_retries = 5
@@ -245,21 +277,21 @@ def main():
         print(f"Connecting to WiFi... (attempt {attempt + 1}/{max_wifi_retries})")
         try:
             if wifi.network_connect():
-                print("✓ WiFi connected")
+                print("WiFi connected")
                 break
             else:
-                print(f"✗ WiFi connection failed")
+                print(f"WiFi connection failed")
                 if attempt < max_wifi_retries - 1:
                     print(f"Retrying in {wifi_retry_delay} seconds...")
                     time.sleep(wifi_retry_delay)
         except Exception as e:
-            print(f"✗ WiFi error: {e}")
+            print(f"WiFi error: {e}")
             if attempt < max_wifi_retries - 1:
                 print(f"Retrying in {wifi_retry_delay} seconds...")
                 time.sleep(wifi_retry_delay)
     else:
         # All retries failed
-        print("✗ Failed to connect to WiFi after all retries. Restarting...")
+        print("Failed to connect to WiFi after all retries. Restarting...")
         led_pwm.deinit()
         time.sleep(5)
         machine.reset()
@@ -274,7 +306,7 @@ def main():
         try:
             start_socket_client()
         except Exception as e:
-            print(f"✗ Fatal error in socket client: {e}")
+            print(f"Fatal error in socket client: {e}")
             print("Restarting in 5 seconds...")
             time.sleep(5)
             import machine
