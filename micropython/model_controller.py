@@ -3,6 +3,7 @@ import socket
 import sys
 import time
 import errno
+import machine
 from machine import Pin
 from machine import PWM
 
@@ -64,7 +65,7 @@ def set_reverser(reversed : bool):
 def start_socket_client():
     s = None
     last_ping_sent = 0
-    last_pong_received = 0
+    waiting_for_pong = False
     
     while True:
         # Connection/reconnection loop
@@ -85,7 +86,7 @@ def start_socket_client():
                 
                 # Reset watchdog timers
                 last_ping_sent = time.time()
-                last_pong_received = time.time()
+                waiting_for_pong = False
                 
             except OSError as e:
                 print(f"✗ Connection failed: {e}")
@@ -107,14 +108,15 @@ def start_socket_client():
                 try:
                     s.write(b"PING\n")
                     last_ping_sent = current_time
+                    waiting_for_pong = True
                     print("→ Sent PING")
                 except OSError as e:
                     print(f"✗ Failed to send PING: {e}")
                     raise
             
-            # Watchdog: Check if we received PONG recently
-            if current_time - last_pong_received > PONG_TIMEOUT:
-                print(f"✗ No PONG received for {PONG_TIMEOUT}s - reconnecting")
+            # Watchdog: Check if we're waiting for PONG and it's overdue
+            if waiting_for_pong and (current_time - last_ping_sent > PONG_TIMEOUT):
+                print(f"✗ No PONG received within {PONG_TIMEOUT}s after PING - reconnecting")
                 try:
                     s.close()
                 except:
@@ -173,7 +175,7 @@ def start_socket_client():
                     Commands that pass an argument, separate name from value with a ":"
                 """
                 if line_str == "PONG":
-                    last_pong_received = time.time()
+                    waiting_for_pong = False
                     print("← Received PONG")
                 elif line_str == "led_button;":
                     print("Received Button")
@@ -235,24 +237,48 @@ def main():
     led_pwm = PWM(led_pin, freq=4, duty_u16=35555)
     reverser.value(False)
 
-    # Connect to WiFi
-
-    print("Connecting to WiFi...")
-    try:
-        if not wifi.network_connect():
-            print("Couldn't establish WiFi connection. Stopping.")
-            led_pwm.deinit()
-            sys.exit()
-    except Exception as e:
+    # Connect to WiFi with retry
+    max_wifi_retries = 5
+    wifi_retry_delay = 3  # seconds
+    
+    for attempt in range(max_wifi_retries):
+        print(f"Connecting to WiFi... (attempt {attempt + 1}/{max_wifi_retries})")
+        try:
+            if wifi.network_connect():
+                print("✓ WiFi connected")
+                break
+            else:
+                print(f"✗ WiFi connection failed")
+                if attempt < max_wifi_retries - 1:
+                    print(f"Retrying in {wifi_retry_delay} seconds...")
+                    time.sleep(wifi_retry_delay)
+        except Exception as e:
+            print(f"✗ WiFi error: {e}")
+            if attempt < max_wifi_retries - 1:
+                print(f"Retrying in {wifi_retry_delay} seconds...")
+                time.sleep(wifi_retry_delay)
+    else:
+        # All retries failed
+        print("✗ Failed to connect to WiFi after all retries. Restarting...")
         led_pwm.deinit()
-        sys.exit()
+        time.sleep(5)
+        machine.reset()
 
     led_pwm.deinit()
     led = Pin(led_pin, Pin.OUT)
     led.value(True)
     is_led_on = True
 
-    start_socket_client()
+    # Start client with exception handling
+    while True:
+        try:
+            start_socket_client()
+        except Exception as e:
+            print(f"✗ Fatal error in socket client: {e}")
+            print("Restarting in 5 seconds...")
+            time.sleep(5)
+            import machine
+            machine.reset()
 
 if __name__ == "__main__":
     main()
