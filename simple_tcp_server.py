@@ -18,8 +18,15 @@ import asyncio
 import sys
 import threading
 
-
+# ============================================================
+# CONFIGURATION
+# ============================================================
 PORT = 8080
+
+# Watchdog timer - should match MCU PONG_TIMEOUT + buffer
+PING_TIMEOUT = 15  # seconds - if no PING received, close connection
+# ============================================================
+
 client_writer = None
 
 
@@ -29,7 +36,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     print(f"\n✅ Client connected from {peer}")
     client_writer = writer
     
-    PING_TIMEOUT = 15  # seconds - if no PING received, close connection
     last_ping_received = asyncio.get_event_loop().time()
     
     try:

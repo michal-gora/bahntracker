@@ -6,15 +6,23 @@ on Psoc 6) connects as a TCP client. Messages are newline-terminated text.
 
 Protocol:
     Server → Model:  SPEED:0.50\n   |   STOP\n
-    Model → Server:  HELLO:MODEL\n  |   HALL\n
-    Server → Model:  ACK\n  (after HELLO)
+    Model → Server:  HELLO:MODEL\n  |   HALL\n  |   PING\n
+    Server → Model:  ACK\n  (after HELLO)  |   PONG\n  (after PING)
 """
 
 import asyncio
 from outputs import ModelOutput
 
-
+# ============================================================
+# CONFIGURATION
+# ============================================================
 MODEL_TCP_PORT = 8080
+
+# Watchdog timer (must coordinate with MCU settings)
+# MCU sends PING every 3s, expects PONG within 10s
+# Server should timeout if no PING received for 15s
+PING_TIMEOUT = 15  # seconds - if no PING received from MCU, close connection
+# ============================================================
 
 
 class TcpModelOutput(ModelOutput):
@@ -62,7 +70,6 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
         peer = writer.get_extra_info("peername")
         print(f"📡 TCP connection from {peer}")
         
-        PING_TIMEOUT = 15  # seconds - if no PING received, close connection
         last_ping_received = asyncio.get_running_loop().time()
 
         try:

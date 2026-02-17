@@ -6,10 +6,28 @@ import errno
 from machine import Pin
 from machine import PWM
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+# Network
+SERVER_IP = "192.168.178.26"
+SERVER_PORT = 8080
+
+# Watchdog timers (must coordinate with server settings)
+PING_INTERVAL = 10      # seconds - how often MCU sends PING
+PONG_TIMEOUT = 3        # seconds - if no PONG received, reconnect
+RECONNECT_DELAY = 5    # seconds - wait before reconnecting
+
+# Hardware pins
+LED_PIN = "P5_3"
+PWM_PIN = "P9_7"
+REVERSER_PIN = "P9_6"
+# ============================================================
+
 is_led_on = True
-led_pin = "P5_3"
-pwm_pin = "P9_7"
-reverser_pin = "P9_6"
+led_pin = LED_PIN
+pwm_pin = PWM_PIN
+reverser_pin = REVERSER_PIN
 
 pwm = PWM(pwm_pin, freq=1000, duty_u16=0)
 reverser = Pin(reverser_pin, Pin.OUT)
@@ -44,12 +62,6 @@ def set_reverser(reversed : bool):
 
             
 def start_socket_client():
-    IP_ADDRESS = "192.168.178.26"
-    PORT = 8080
-    RECONNECT_DELAY = 5  # seconds
-    PING_INTERVAL = 3  # seconds - how often to send PING
-    PONG_TIMEOUT = 10  # seconds - if no PONG received, reconnect
-    
     s = None
     last_ping_sent = 0
     last_pong_received = 0
@@ -58,14 +70,14 @@ def start_socket_client():
         # Connection/reconnection loop
         if s is None:
             try:
-                print(f"Attempting to connect to {IP_ADDRESS}:{PORT}...")
+                print(f"Attempting to connect to {SERVER_IP}:{SERVER_PORT}...")
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.settimeout(5.0)  # 5 second timeout for connect
-                s.connect((IP_ADDRESS, PORT))
+                s.connect((SERVER_IP, SERVER_PORT))
                 s.setblocking(False)  # Set non-blocking after connect
                 
-                print(f"✓ Connected to server at {IP_ADDRESS}:{PORT}")
+                print(f"✓ Connected to server at {SERVER_IP}:{SERVER_PORT}")
                 
                 # Send HELLO handshake
                 s.write(b"HELLO:MODEL\n")
@@ -246,7 +258,6 @@ if __name__ == "__main__":
     main()
 
 ### TODO:
-# - Add watchdog timer to reset if connection lost for too long
 # - Add hall effect sensor reading and send "HALL\n" to server when triggered
 # - Add error handling for malformed commands
 # - Finally adjust it in sbahn server script to send speed and reverser commands based on state machine logic
