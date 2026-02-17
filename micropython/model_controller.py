@@ -44,11 +44,15 @@ def set_reverser(reversed : bool):
 
             
 def start_socket_client():
-    IP_ADDRESS = "192.168.53.131"
-    PORT = 8766
+    IP_ADDRESS = "192.168.53.60"
+    PORT = 8080
     RECONNECT_DELAY = 5  # seconds
+    PING_INTERVAL = 3  # seconds - how often to send PING
+    PONG_TIMEOUT = 10  # seconds - if no PONG received, reconnect
     
     s = None
+    last_ping_sent = 0
+    last_pong_received = 0
     
     while True:
         # Connection/reconnection loop
@@ -67,6 +71,10 @@ def start_socket_client():
                 s.write(b"HELLO:MODEL\n")
                 print("Sent HELLO:MODEL")
                 
+                # Reset watchdog timers
+                last_ping_sent = time.time()
+                last_pong_received = time.time()
+                
             except OSError as e:
                 print(f"✗ Connection failed: {e}")
                 if s:
@@ -81,6 +89,28 @@ def start_socket_client():
         
         # Main communication loop
         try:
+            # Watchdog: Check if we need to send PING
+            current_time = time.time()
+            if current_time - last_ping_sent >= PING_INTERVAL:
+                try:
+                    s.write(b"PING\n")
+                    last_ping_sent = current_time
+                    print("→ Sent PING")
+                except OSError as e:
+                    print(f"✗ Failed to send PING: {e}")
+                    raise
+            
+            # Watchdog: Check if we received PONG recently
+            if current_time - last_pong_received > PONG_TIMEOUT:
+                print(f"✗ No PONG received for {PONG_TIMEOUT}s - reconnecting")
+                try:
+                    s.close()
+                except:
+                    pass
+                s = None
+                time.sleep(RECONNECT_DELAY)
+                continue
+            
             # Read line (non-blocking)
             raw_line = b""
             try:
@@ -130,9 +160,9 @@ def start_socket_client():
                     Commands that simply send a signal without passing arguments, end with ";"
                     Commands that pass an argument, separate name from value with a ":"
                 """
-                if line_str == "ping;":
-                    print("Received Ping")
-                    s.write(b"pong\n")
+                if line_str == "PONG":
+                    last_pong_received = time.time()
+                    print("← Received PONG")
                 elif line_str == "led_button;":
                     print("Received Button")
                     toggle_led()

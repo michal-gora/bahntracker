@@ -19,7 +19,7 @@ import sys
 import threading
 
 
-PORT = 8766
+PORT = 8080
 client_writer = None
 
 
@@ -28,6 +28,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     peer = writer.get_extra_info("peername")
     print(f"\n✅ Client connected from {peer}")
     client_writer = writer
+    
+    PING_TIMEOUT = 15  # seconds - if no PING received, close connection
+    last_ping_received = asyncio.get_event_loop().time()
     
     try:
         # Wait for HELLO:MODEL
@@ -46,12 +49,29 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         # Read from client in loop
         while True:
             try:
-                line = await reader.readline()
+                # Check watchdog timeout
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_ping_received > PING_TIMEOUT:
+                    print(f"\n⚠️  No PING received for {PING_TIMEOUT}s - closing connection")
+                    break
+                
+                line = await asyncio.wait_for(reader.readline(), timeout=1.0)
                 if not line:
                     print("\n⚠️  Client disconnected")
                     break
                 msg = line.decode().strip()
                 print(f"📩 Received: {msg}")
+                
+                # Handle PING from client
+                if msg == "PING":
+                    last_ping_received = current_time
+                    writer.write(b"PONG\n")
+                    await writer.drain()
+                    print("📤 Sent: PONG")
+                    
+            except asyncio.TimeoutError:
+                # No data received in 1s, continue to check watchdog
+                continue
             except Exception as e:
                 print(f"\n❌ Read error: {e}")
                 break
@@ -108,6 +128,7 @@ async def main():
     thread = threading.Thread(target=input_thread, daemon=True)
     thread.start()
     
+    # Bind to all interfaces
     server = await asyncio.start_server(handle_client, "0.0.0.0", PORT)
     addr = server.sockets[0].getsockname()
     print(f"🚀 TCP server listening on {addr[0]}:{addr[1]}")
