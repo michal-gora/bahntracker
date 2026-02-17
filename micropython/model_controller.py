@@ -180,9 +180,7 @@ def start_socket_client():
                     reverser_state = bool(int(line_str.split(":")[1]))
                     print("Reverser state:", reverser_state)
                     set_reverser(reverser_state)
-                else:
-                    print(f"Received: {line_str}")
-                    s.write(b"Line received\n")
+                # Ignore unknown messages silently (could be ACK or other server messages)
 
         except OSError as e:
             code = e.args[0]
