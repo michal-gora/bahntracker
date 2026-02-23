@@ -27,10 +27,13 @@ HALL_PIN = "P9_0"
 
 # Hall sensor settings
 HALL_DEBOUNCE_MS = 200  # milliseconds - ignore triggers within this time
+HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts
 # ============================================================
 
 # Global state
-hall_triggered = False
+hall_triggered: bool = False
+train_started_at: float = 0.0  # timestamp when train last started (speed > 0)
+current_speed: float = 0.0
 
 is_led_on = True
 led_pin = LED_PIN
@@ -55,11 +58,17 @@ def set_speed(speed : float):
     Args:
         speed: [0, 1], sets the PWM between 0% and 100%
     """
-    global pwm
+    global pwm, train_started_at, current_speed
     
     # Clipping speed to [0, 1]
     speed = max(0., min(speed, 1.))
     
+    # Track when train starts moving (transition from 0 to >0)
+    if current_speed == 0.0 and speed > 0.0:
+        train_started_at = time.time()
+        print(f"Train started at {train_started_at}")
+    
+    current_speed = speed
     pwm.duty_u16(int(speed * 65535.0))
     print(f"Set pwm duty cycle to {speed}")
     return
@@ -81,8 +90,8 @@ def start_socket_client():
     global hall_triggered
     
     s = None
-    last_ping_sent = 0
-    waiting_for_pong = False
+    last_ping_sent: float = 0.0
+    waiting_for_pong: bool = False
     
     while True:
         # Connection/reconnection loop
@@ -122,13 +131,21 @@ def start_socket_client():
             # Check if hall sensor was triggered (from IRQ)
             if hall_triggered:
                 hall_triggered = False  # Reset flag
-                try:
-                    s.write(b"HALL\n")
-                    set_speed(0.0)  # Stop train on hall trigger
-                    print("Sent HALL")
-                except OSError as e:
-                    print(f"Failed to send HALL: {e}")
-                    raise
+                
+                # Check if we're in startup delay period
+                current_time = time.time()
+                time_since_start = current_time - train_started_at
+                
+                if time_since_start < HALL_STARTUP_DELAY:
+                    print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
+                else:
+                    try:
+                        s.write(b"HALL\n")
+                        set_speed(0.0)  # Stop train on hall trigger
+                        print("Sent HALL")
+                    except OSError as e:
+                        print(f"Failed to send HALL: {e}")
+                        raise
             
             # Watchdog: Check if we need to send PING
             current_time = time.time()

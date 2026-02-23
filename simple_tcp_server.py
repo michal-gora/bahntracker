@@ -102,8 +102,8 @@ def input_thread():
         'j': b"SPEED:0.2\n",
         'k': b"SPEED:0.5\n",
         'l': b"SPEED:1.0\n",
-        'r': b"REVERSER:1\n",
-        'f': b"REVERSER:0\n",
+        'r': b"REVERSER:0\n",
+        'f': b"REVERSER:1\n",
     }
     
     while True:

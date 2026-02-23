@@ -5,7 +5,7 @@ Architecture: Server runs a plain TCP server. The model controller (MicroPython
 on Psoc 6) connects as a TCP client. Messages are newline-terminated text.
 
 Protocol:
-    Server → Model:  SPEED:0.50\n   |   STOP\n
+    Server → Model:  SPEED:x\n (x-> float [0,1])  |   REVERSER:x\n (x-> 1 = forward, 0 = reverse)
     Model → Server:  HELLO:MODEL\n  |   HALL\n  |   PING\n
     Server → Model:  ACK\n  (after HELLO)  |   PONG\n  (after PING)
 """
