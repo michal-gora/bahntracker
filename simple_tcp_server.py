@@ -98,8 +98,12 @@ def input_thread():
     commands = {
         'p': b"ping;\n",
         'l': b"led_button;\n",
-        's': b"speed:0.2\n",
+        's': b"speed:0.0\n",
+        'j': b"speed:0.2\n",
+        'k': b"speed:0.5\n",
+        'l': b"speed:1.0\n",
         'r': b"reverser:1\n",
+        'f': b"reverser:0\n",
     }
     
     while True:
