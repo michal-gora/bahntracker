@@ -7,11 +7,6 @@ Usage:
     python simple_tcp_server.py
     
 Commands (type and press Enter):
-    p - send ping;
-    l - send led_button;
-    s - send speed:0.50
-    r - send reverser:1
-    q - quit
 """
 
 import asyncio
@@ -102,8 +97,8 @@ def input_thread():
         'j': b"SPEED:0.2\n",
         'k': b"SPEED:0.5\n",
         'l': b"SPEED:1.0\n",
-        'r': b"REVERSER:0\n",
         'f': b"REVERSER:1\n",
+        'r': b"REVERSER:0\n",
     }
     
     while True:

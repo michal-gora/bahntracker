@@ -74,6 +74,7 @@ def set_speed(speed : float):
     return
     
 def set_reverser(reversed : bool):
+    print("Set reverser to", reversed)
     global reverser
     reverser.value(reversed)
 
