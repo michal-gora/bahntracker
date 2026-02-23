@@ -205,11 +205,11 @@ def start_socket_client():
                 if line_str == "PONG":
                     waiting_for_pong = False
                     print("Received PONG")
-                elif line_str == "led_button;":
+                elif line_str == "LED_BUTTON":
                     print("Received Button")
                     toggle_led()
                     s.write(b"LED toggled!\n")
-                elif line_str.startswith("speed:"):
+                elif line_str.startswith("SPEED:"):
                     print("Received slider")
                     s.write(b"Slider received!\n")
                     try:
@@ -218,7 +218,7 @@ def start_socket_client():
                         print(f"Slider value: {value}")
                     except (IndexError, ValueError):
                         print("Invalid slider format")
-                elif line_str.startswith("reverser:"):
+                elif line_str.startswith("REVERSER:"):
                     reverser_state = bool(int(line_str.split(":")[1]))
                     print("Reverser state:", reverser_state)
                     set_reverser(reverser_state)

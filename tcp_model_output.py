@@ -57,7 +57,7 @@ class TcpModelOutput(ModelOutput):
         self._do_send(f"SPEED:{speed:.2f}\n")
 
     def send_stop(self):
-        self._do_send("STOP\n")
+        self._do_send("SPEED:0.0\n")
 
 
 async def tcp_model_server(model_output: TcpModelOutput, state_machine):

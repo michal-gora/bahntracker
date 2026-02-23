@@ -96,14 +96,14 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 def input_thread():
     """Thread to read stdin and send commands"""
     commands = {
-        'p': b"ping;\n",
-        'l': b"led_button;\n",
-        's': b"speed:0.0\n",
-        'j': b"speed:0.2\n",
-        'k': b"speed:0.5\n",
-        'l': b"speed:1.0\n",
-        'r': b"reverser:1\n",
-        'f': b"reverser:0\n",
+        'p': b"PONG\n",
+        'l': b"LED_BUTTON\n",
+        's': b"SPEED:0.0\n",
+        'j': b"SPEED:0.2\n",
+        'k': b"SPEED:0.5\n",
+        'l': b"SPEED:1.0\n",
+        'r': b"REVERSER:1\n",
+        'f': b"REVERSER:0\n",
     }
     
     while True:
