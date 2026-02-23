@@ -263,7 +263,8 @@ def start_socket_client():
 def main():
     global led, is_led_on
     led_pwm = PWM(led_pin, freq=4, duty_u16=35555)
-    reverser.value(False)
+    set_reverser(True)
+    set_speed(0.0)
     
     # Set up hall effect sensor with interrupt
     hall_sensor = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)

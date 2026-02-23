@@ -115,6 +115,8 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
                         writer.write(b"PONG\n")
                         await writer.drain()
                         print("📤 Sent PONG")
+                    elif msg == "Slider received!":
+                        print("📤 Slider was received!")
                     else:
                         print(f"⚠️  Unknown message from model: {msg!r}")
                         
