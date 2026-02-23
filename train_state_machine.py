@@ -31,9 +31,9 @@ class State(Enum):
 class TrainStateMachine:
     """ONE state machine that controls both model train and station display."""
 
-    TRACK_LOOP_SECONDS = 10.0   # Time for model to go one station at full speed (calibrate!)
-    NONAME_TRAVEL_SECONDS = 8.0  # Time from Fasanenpark to noname (calibrate!)
-    MIN_SPEED = 0.01
+    TRACK_LOOP_SECONDS = 60.0   # Time for model to go one station at full speed (calibrate!)
+    NONAME_TRAVEL_SECONDS = 60.0  # Time from Fasanenpark to noname (calibrate!)
+    MIN_SPEED = 0.01s
     MAX_SPEED = 1.0
 
     def __init__(self, model_output, station_output, stations: list):

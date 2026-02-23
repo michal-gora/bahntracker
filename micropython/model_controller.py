@@ -124,6 +124,7 @@ def start_socket_client():
                 hall_triggered = False  # Reset flag
                 try:
                     s.write(b"HALL\n")
+                    set_speed(0.0)  # Stop train on hall trigger
                     print("Sent HALL")
                 except OSError as e:
                     print(f"Failed to send HALL: {e}")
@@ -316,6 +317,6 @@ if __name__ == "__main__":
     main()
 
 ### TODO:
-# - Add hall effect sensor reading and send "HALL\n" to server when triggered
+# - Add hall effect sensor debouncing
 # - Add error handling for malformed commands
 # - Finally adjust it in sbahn server script to send speed and reverser commands based on state machine logic
