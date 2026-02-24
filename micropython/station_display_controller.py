@@ -40,6 +40,13 @@ def display_text(line1: str, line2: str = ""):
     LCD.puts(f"{line2.strip()[:16]}", y=1)
     print(f"Display: [{line1}] [{line2}]")
 
+def display_eta(remaining_seconds: int):
+    """Show remaining time until train arrives at Fasanenpark."""
+    mins = remaining_seconds // 60
+    secs = remaining_seconds % 60
+    print(f"ETA display: {mins}m {secs:02d}s remaining")
+
+
 def display_init():
     """Initialize the display hardware. Called once at startup."""
     display_clear()
@@ -54,6 +61,9 @@ def start_socket_client():
     s = None
     last_ping_sent: float = 0.0
     waiting_for_pong: bool = False
+    eta_unix: int | None = None
+    last_eta_display: float = 0.0
+    ETA_DISPLAY_INTERVAL = 1  # seconds between ETA log updates
 
     while True:
         # Connection/reconnection loop
@@ -174,25 +184,27 @@ def start_socket_client():
                     value = line_str[4:]  # strip "ETA:"
                     if value == "none":
                         eta_unix = None
+                        print("ETA: none")
                     else:
                         try:
                             eta_unix = int(value)
-                            # print remaining time
-                            remaining_seconds = eta_unix - int(time.time())
-                            if remaining_seconds > 0:
-                                print(f"ETA: {remaining_seconds} seconds")
-                            else:
-                                print("ETA: arriving now or already passed")
+                            print(f"ETA: {eta_unix}")
                         except ValueError:
                             print(f"Invalid ETA value: {value}")
                             eta_unix = None
                     # TODO: implement display logic (eta_unix is seconds since epoch,
                     # use time.time() to compute remaining seconds for countdown)
+
                 elif line_str == "ACK":
                     display_text("Connected")
                     print("Successfully connected")
                 # Ignore unknown messages silently (could be ACK or other server messages)
 
+            # Periodically display remaining ETA
+            if eta_unix is not None and current_time - last_eta_display >= ETA_DISPLAY_INTERVAL:
+                remaining = eta_unix - int(current_time)
+                display_eta(remaining)
+                last_eta_display = current_time
         except OSError as e:
             code = e.args[0]
             if code == errno.ECONNRESET:
