@@ -192,7 +192,7 @@ class TrainStateMachine:
 
         if s == State.WAITING_AT_NONAME:
             self.model.send_stop()
-            self.station.send_clear()
+            # self.station.send_clear() # TODO should we clear the station display when parked at noname? Or show "noname"?
             print(f"[{now}]   → Model: STOP | Station: clear")
 
         elif s == State.AT_STATION_VALID:
