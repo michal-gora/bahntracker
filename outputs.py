@@ -45,6 +45,11 @@ class StationOutput(ABC):
         ...
 
     @abstractmethod
+    def send_eta(self, arrival_unix: int | None):
+        """Send ETA:<unix_timestamp> or ETA:none when there is no tracked train."""
+        ...
+
+    @abstractmethod
     def send_clear(self):
         """Send STATION:clear."""
         ...
@@ -53,7 +58,10 @@ class StationOutput(ABC):
 class PrintStationOutput(StationOutput):
     """Print-stub: logs commands to console."""
 
-    def send_station(self, name: str, valid: bool):
+    def send_station(self, name: str, state: str):
+        pass  # State machine already prints
+
+    def send_eta(self, arrival_unix: int | None):
         pass  # State machine already prints
 
     def send_clear(self):

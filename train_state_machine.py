@@ -52,22 +52,27 @@ class TrainStateMachine:
         self.current_station_index: int | None = None
         self.last_api_state: str | None = None  # "BOARDING" or "DRIVING"
         self.travel_speed: float = 0.0
+        self.eta_to_fasanenpark: int | None = None  # absolute unix timestamp of expected arrival at Fasanenpark
 
         # Apply initial state outputs
         self._apply_outputs()
 
     # ── Public API: feed events ─────────────────────────────────────────
 
-    def on_api_state_change(self, new_api_state: str, coordinates: list | None = None):
+    def on_api_state_change(self, new_api_state: str, coordinates: list | None = None, arrival_unix: int | None = None):
         """Called when the real train changes state (BOARDING / DRIVING).
 
         Args:
             new_api_state:  "BOARDING" or "DRIVING"
             coordinates:    [lon, lat] from geops.io (EPSG:4326 already converted)
+            arrival_unix:   Expected arrival time at Fasanenpark as unix timestamp (scheduled + delay)
         """
         old_state = self.state
-        old_api = self.last_api_state
         self.last_api_state = new_api_state
+
+        if arrival_unix is not None:
+            self.eta_to_fasanenpark = arrival_unix
+            self.station.send_eta(arrival_unix)
 
         new_state = self._transition_on_api(new_api_state, coordinates)
         if new_state and new_state != old_state:
@@ -175,6 +180,8 @@ class TrainStateMachine:
         elif new_state == State.WAITING_AT_NONAME:
             self.current_station_index = None
             self.last_api_state = None
+            self.eta_to_fasanenpark = None
+            self.station.send_eta(None)
 
         # ── State transition ──
         old_name = self.state.name
@@ -199,19 +206,22 @@ class TrainStateMachine:
             self.model.send_stop()
             name = self._current_station_name()
             self.station.send_station(name, State.AT_STATION_VALID.name)
-            print(f"[{now}]   → Model: STOP | Station: {name} ✅")
+            eta_str = self._eta_str()
+            print(f"[{now}]   → Model: STOP | Station: {name} ✅{eta_str}")
 
         elif s == State.AT_STATION_WAITING:
             self.model.send_stop()
             name = self._current_station_name()
             self.station.send_station(name, State.AT_STATION_WAITING.name)
-            print(f"[{now}]   → Model: STOP | Station: {name} ❌ (waiting)")
+            eta_str = self._eta_str()
+            print(f"[{now}]   → Model: STOP | Station: {name} ❌ (waiting){eta_str}")
 
         elif s == State.DRIVING:
             self.model.send_speed(self.travel_speed)
-            name = self._current_station_name()  # current_station_index IS our destination after increment
+            name = self._current_station_name()
             self.station.send_station(name, State.DRIVING.name)
-            print(f"[{now}]   → Model: SPEED:{self.travel_speed:.2f} | Station: → {name}")
+            eta_str = self._eta_str()
+            print(f"[{now}]   → Model: SPEED:{self.travel_speed:.2f} | Station: → {name}{eta_str}")
 
         elif s == State.DRIVING_TO_NONAME:
             self.model.send_speed(self.travel_speed)
@@ -220,9 +230,10 @@ class TrainStateMachine:
 
         elif s == State.RUNNING_TO_STATION:
             self.model.send_speed(self.MAX_SPEED)
-            name = self._current_station_name()  # current_station_index IS our destination after increment
+            name = self._current_station_name()
             self.station.send_station(name, State.RUNNING_TO_STATION.name)
-            print(f"[{now}]   → Model: SPEED:1.0 (catch-up!) | Station: → {name}")
+            eta_str = self._eta_str()
+            print(f"[{now}]   → Model: SPEED:1.0 (catch-up!) | Station: → {name}{eta_str}")
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -269,6 +280,12 @@ class TrainStateMachine:
         """speed = TRACK_LOOP_SECONDS / travel_time, clamped to [MIN, MAX]."""
         speed = self.TRACK_LOOP_SECONDS / seconds
         return max(self.MIN_SPEED, min(self.MAX_SPEED, speed))
+
+    def _eta_str(self) -> str:
+        """Human-readable ETA string for log output, e.g. ' (ETA Fasanenpark: 19:04)'."""
+        if self.eta_to_fasanenpark is None:
+            return ""
+        return f" (ETA Fasanenpark: {datetime.fromtimestamp(self.eta_to_fasanenpark).strftime('%H:%M')})"
 
     def _find_nearest_station(self, coordinates: list) -> int:
         """Find the station closest to the given [lon, lat] coordinates."""

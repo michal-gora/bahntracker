@@ -163,10 +163,31 @@ def start_socket_client():
                         display_clear()
                     elif len(parts) == 3:
                         station_name = parts[1]
-                        state = parts[2]  # e.g. "AT_STATION_VALID"
+                        state = parts[2]
                         display_text(station_name, state)
                     else:
                         print(f"Unknown STATION format: {line_str}")
+
+                elif line_str.startswith("ETA:"):
+                    # ETA:<unix_timestamp>  → absolute arrival time at Fasanenpark
+                    # ETA:none              → no tracked train, no ETA
+                    value = line_str[4:]  # strip "ETA:"
+                    if value == "none":
+                        eta_unix = None
+                    else:
+                        try:
+                            eta_unix = int(value)
+                            # print remaining time
+                            remaining_seconds = eta_unix - int(time.time())
+                            if remaining_seconds > 0:
+                                print(f"ETA: {remaining_seconds} seconds")
+                            else:
+                                print("ETA: arriving now or already passed")
+                        except ValueError:
+                            print(f"Invalid ETA value: {value}")
+                            eta_unix = None
+                    # TODO: implement display logic (eta_unix is seconds since epoch,
+                    # use time.time() to compute remaining seconds for countdown)
                 elif line_str == "ACK":
                     display_text("Connected")
                     print("Successfully connected")

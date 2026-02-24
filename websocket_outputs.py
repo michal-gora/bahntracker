@@ -81,10 +81,15 @@ class WebSocketStationOutput(StationOutput):
                 self.connected = False
 
     def send_station(self, name: str, state: str):
-        """Send STATION:name:valid or STATION:name:invalid."""
-        validity = "valid" if valid else "invalid"
+        """Send STATION:name:STATE."""
         if self.websocket:
-            asyncio.create_task(self._send(f"STATION:{name}:{validity}\n"))
+            asyncio.create_task(self._send(f"STATION:{name}:{state}\n"))
+
+    def send_eta(self, arrival_unix: int | None):
+        """Send ETA:<unix_timestamp> or ETA:none."""
+        msg = f"ETA:{arrival_unix}\n" if arrival_unix is not None else "ETA:none\n"
+        if self.websocket:
+            asyncio.create_task(self._send(msg))
         # Still print for debugging
         # print(f"   → Station: {name} {'✅' if valid else '❌'}")
 

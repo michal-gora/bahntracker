@@ -31,33 +31,33 @@ class TcpStationOutput(StationOutput):
     def __init__(self):
         self.writer: asyncio.StreamWriter | None = None
         self.connected = False
-        self._last_message: str | None = None  # cached for replay on reconnect
+        self._last_station_message: str | None = None  # cached for replay on reconnect
+        self._last_eta_message: str | None = None      # cached for replay on reconnect
 
     def set_writer(self, writer: asyncio.StreamWriter):
         self.writer = writer
         self.connected = True
         print("🔌 Station display connected (TCP)")
-        # Immediately replay the last known state so the display is up to date
-        if self._last_message:
-            try:
-                writer.write(self._last_message.encode())
-                asyncio.create_task(writer.drain())
-                print(f"📤 → Station (replay): {self._last_message.strip()}")
-            except Exception as e:
-                print(f"❌ Error replaying state to station display: {e}")
+        # Immediately replay last known state so the display is up to date
+        for msg in (self._last_station_message, self._last_eta_message):
+            if msg:
+                try:
+                    writer.write(msg.encode())
+                    asyncio.create_task(writer.drain())
+                    print(f"📤 → Station (replay): {msg.strip()}")
+                except Exception as e:
+                    print(f"❌ Error replaying state to station display: {e}")
 
     def disconnect(self):
         self.writer = None
         self.connected = False
         print("⚠️  Station display disconnected")
 
-    def _do_send(self, message: str):
-        """Cache and queue a message to the station display (non-blocking)."""
-        self._last_message = message
+    def _write(self, message: str):
+        """Send a message to the station display if connected (non-blocking)."""
         if self.writer and self.connected:
             try:
                 self.writer.write(message.encode())
-                # drain is async; fire-and-forget from sync context
                 asyncio.create_task(self.writer.drain())
             except Exception as e:
                 print(f"❌ Error sending to station display: {e}")
@@ -65,12 +65,21 @@ class TcpStationOutput(StationOutput):
 
     def send_station(self, name: str, state: str):
         """Send STATION:name:STATE."""
-        self._do_send(f"STATION:{name}:{state}\n")
+        self._last_station_message = f"STATION:{name}:{state}\n"
+        self._write(self._last_station_message)
         print(f"📤 → Station: {name} ({state})")
+
+    def send_eta(self, arrival_unix: int | None):
+        """Send ETA:<unix_timestamp> or ETA:none."""
+        self._last_eta_message = f"ETA:{arrival_unix}\n" if arrival_unix is not None else "ETA:none\n"
+        self._write(self._last_eta_message)
+        eta_str = str(arrival_unix) if arrival_unix is not None else "none"
+        print(f"📤 → Station ETA: {eta_str}")
 
     def send_clear(self):
         """Send STATION:clear."""
-        self._do_send("STATION:clear\n")
+        self._last_station_message = "STATION:clear\n"
+        self._write(self._last_station_message)
         print(f"📤 → Station: clear")
 
 

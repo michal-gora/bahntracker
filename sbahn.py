@@ -151,7 +151,7 @@ async def subscribe_bbox(ws):
     print("📡 Subscribed to BBOX live data\n")
 
 
-async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine):
+async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine, scheduled_ms: float):
     """
     Feed live train data into the state machine until the real train departs Fasanenpark
     (SM enters DRIVING_TO_NONAME). From that point the model runs autonomously back to
@@ -173,13 +173,13 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine)
                     if not item:
                         continue
                     trajectory = item.get("content")
-                    new_real = _process_train_update(trajectory, train_number, sm, last_real_state)
+                    new_real = _process_train_update(trajectory, train_number, sm, last_real_state, scheduled_ms)
                     if new_real is not None:
                         last_real_state = new_real
 
             elif source.startswith("trajectory"):
                 # Individual trajectory update
-                new_real = _process_train_update(content, train_number, sm, last_real_state)
+                new_real = _process_train_update(content, train_number, sm, last_real_state, scheduled_ms)
                 if new_real is not None:
                     last_real_state = new_real
 
@@ -197,7 +197,8 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine)
 
 
 def _process_train_update(
-    data: dict, train_number: int, sm: TrainStateMachine, last_reported_state: str | None
+    data: dict, train_number: int, sm: TrainStateMachine, last_reported_state: str | None,
+    scheduled_ms: float
 ) -> str | None:
     """
     Process a single train update. Feed state changes to the state machine.
@@ -221,14 +222,16 @@ def _process_train_update(
     # Only feed state machine on actual state CHANGES
     if new_state and new_state != last_reported_state:
         now = datetime.now().strftime("%H:%M:%S")
-        delay = props.get("delay")
+        delay = props.get("delay") or 0
         delay_str = f" (delay: {delay/1000:.0f}s)" if delay else " (on time)"
         pos_str = f"\n   🗺️  https://www.google.com/maps?q={coordinates[1]},{coordinates[0]}" if coordinates else ""
+
+        arrival_unix = int((scheduled_ms + delay) / 1000)
 
         icon = "🚉" if new_state == "BOARDING" else "🚆"
         print(f"\n[{now}] {icon} Real train: {new_state}{delay_str}{pos_str}")
 
-        sm.on_api_state_change(new_state, coordinates)
+        sm.on_api_state_change(new_state, coordinates, arrival_unix)
         return new_state
 
     return None
@@ -331,7 +334,8 @@ async def main():
                             print(f"  State machine: {sm.state.name}")
                             print(f"{'='*60}\n")
 
-                            await track_with_state_machine(ws, train_number, sm)
+                            scheduled_ms = next(t["timestamp"] for t in trains if t["number"] == train_number)
+                            await track_with_state_machine(ws, train_number, sm, scheduled_ms)
                             last_train_number = train_number
 
                             # SM is in DRIVING_TO_NONAME — wait for the HALL sensor to fire
