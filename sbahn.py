@@ -134,11 +134,11 @@ def pick_target_train(trains: list, exclude: int | None = None) -> int | None:
 # ── Live tracking with state machine ───────────────────────────────────
 
 async def keep_alive(ws):
-    """Send a WebSocket-level ping frame every 15 seconds to keep the connection alive."""
+    """Send a text PING message every 10 seconds — required by the geops.io API to keep the connection alive."""
     while True:
         try:
-            await asyncio.sleep(7)
-            await ws.ping()
+            await asyncio.sleep(10)
+            await ws.send("PING")
         except Exception:
             break
 
