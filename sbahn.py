@@ -134,11 +134,11 @@ def pick_target_train(trains: list, exclude: int | None = None) -> int | None:
 # ── Live tracking with state machine ───────────────────────────────────
 
 async def keep_alive(ws):
-    """Send PING every 7 seconds to keep WebSocket alive."""
+    """Send a WebSocket-level ping frame every 15 seconds to keep the connection alive."""
     while True:
         try:
-            await asyncio.sleep(7)
-            await ws.send("PING")
+            await asyncio.sleep(15)
+            await ws.ping()
         except Exception:
             break
 
@@ -287,71 +287,85 @@ async def main():
     await tcp_station_server(station)
     print()
 
-    async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
-        print("🔌 Connected to geops.io WebSocket\n")
+    # These survive WebSocket reconnections
+    stdin_task = asyncio.create_task(stdin_listener(sm))
+    last_train_number: int | None = None
+    uic: int | None = None
 
-        # Start keepalive
-        keepalive_task = asyncio.create_task(keep_alive(ws))
-
-        try:
-            # Subscribe to BBOX once for the lifetime of this WebSocket connection
-            await subscribe_bbox(ws)
-
-            # Get station UIC once
-            uic = await get_station_uic(ws, "Fasanenpark")
-            if not uic:
-                print("❌ Could not find Fasanenpark station")
-                return
-
-            # Start stdin listener as a long-running background task
-            stdin_task = asyncio.create_task(stdin_listener(sm))
-
-            # Main loop: pick next train → track it → repeat
-            last_train_number: int | None = None
-            while True:
-                trains = await get_incoming_trains(ws, uic)
-                if not trains:
-                    print("❌ No trains found in timetable, retrying in 30s...")
-                    await asyncio.sleep(30)
-                    continue
-
-                print(f"\n📋 Timetable ({len(trains)} trains):")
-                for t in trains:
-                    marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
-                    skip = " (last, skipping)" if t["number"] == last_train_number else ""
-                    print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
-
-                train_number = pick_target_train(trains, exclude=last_train_number)
-                if not train_number:
-                    print(f"⏳ No suitable train in the next 30 minutes, retrying in 60s...")
-                    await asyncio.sleep(60)
-                    continue
-
-                print(f"\n{'='*60}")
-                print(f"  TRACKING TRAIN {train_number}")
-                print(f"  State machine: {sm.state.name}")
-                print(f"{'='*60}\n")
-
-                await track_with_state_machine(ws, train_number, sm)
-                last_train_number = train_number
-
-                # SM is in DRIVING_TO_NONAME — wait for the HALL sensor to fire before
-                # picking the next train, otherwise a BOARDING event from the new train
-                # would arrive while the SM can't accept it and would be lost.
-                if sm.state != State.WAITING_AT_NONAME:
-                    print("⏳ Waiting for model to reach noname (HALL sensor)...")
-                    while sm.state != State.WAITING_AT_NONAME:
-                        await asyncio.sleep(0.5)
-
-        except KeyboardInterrupt:
-            print("\n👋 Stopped by user")
-        finally:
-            stdin_task.cancel()
-            keepalive_task.cancel()
+    try:
+        while True:  # reconnection loop
             try:
-                await keepalive_task
-            except asyncio.CancelledError:
-                pass
+                async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
+                    print("🔌 Connected to geops.io WebSocket\n")
+                    keepalive_task = asyncio.create_task(keep_alive(ws))
+                    try:
+                        await subscribe_bbox(ws)
+
+                        if uic is None:
+                            uic = await get_station_uic(ws, "Fasanenpark")
+                            if not uic:
+                                print("❌ Could not find Fasanenpark station")
+                                return
+
+                        while True:  # main train loop
+                            trains = await get_incoming_trains(ws, uic)
+                            if not trains:
+                                print("❌ No trains found in timetable, retrying in 30s...")
+                                await asyncio.sleep(30)
+                                continue
+
+                            print(f"\n📋 Timetable ({len(trains)} trains):")
+                            for t in trains:
+                                marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
+                                skip = " (last, skipping)" if t["number"] == last_train_number else ""
+                                print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
+
+                            train_number = pick_target_train(trains, exclude=last_train_number)
+                            if not train_number:
+                                print(f"⏳ No suitable train in the next 30 minutes, retrying in 60s...")
+                                await asyncio.sleep(60)
+                                continue
+
+                            print(f"\n{'='*60}")
+                            print(f"  TRACKING TRAIN {train_number}")
+                            print(f"  State machine: {sm.state.name}")
+                            print(f"{'='*60}\n")
+
+                            await track_with_state_machine(ws, train_number, sm)
+                            last_train_number = train_number
+
+                            # SM is in DRIVING_TO_NONAME — wait for the HALL sensor to fire
+                            # before picking the next train, otherwise a BOARDING event from
+                            # the new train would arrive while the SM can't accept it.
+                            # We must keep reading from the WebSocket during this wait so the
+                            # connection stays alive (unread messages cause flow-control
+                            # backpressure that eventually blocks the server's keepalive pings).
+                            if sm.state != State.WAITING_AT_NONAME:
+                                print("⏳ Waiting for model to reach noname (HALL sensor)...")
+                                while sm.state != State.WAITING_AT_NONAME:
+                                    try:
+                                        await asyncio.wait_for(ws.recv(), timeout=0.5)
+                                    except asyncio.TimeoutError:
+                                        pass
+
+                    finally:
+                        keepalive_task.cancel()
+                        try:
+                            await keepalive_task
+                        except asyncio.CancelledError:
+                            pass
+
+            except websockets.exceptions.ConnectionClosedError as e:
+                print(f"\n🔌 WebSocket connection lost ({e}). Reconnecting in 5s...")
+                await asyncio.sleep(5)
+            except OSError as e:
+                print(f"\n🔌 Network error ({e}). Reconnecting in 10s...")
+                await asyncio.sleep(10)
+
+    except KeyboardInterrupt:
+        print("\n👋 Stopped by user")
+    finally:
+        stdin_task.cancel()
 
     print(f"\n📊 Final: {sm.status()}")
 
