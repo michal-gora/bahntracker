@@ -101,23 +101,33 @@ async def get_incoming_trains(ws, uic: str, max_trains: int = 100) -> list:
     return trains
 
 
-def pick_target_train(trains: list) -> int | None:
-    """Pick first train going to one of our target destinations in the next 30 minutes."""
+def pick_target_train(trains: list, exclude: int | None = None) -> int | None:
+    """Pick first train going to one of our target destinations in the next 30 minutes.
+    
+    Args:
+        trains:  Timetable list from get_incoming_trains().
+        exclude: Train number to skip (e.g. the one we just finished tracking).
+    """
     import time
     now_ms = time.time() * 1000
     max_future_ms = now_ms + (30 * 60 * 1000)  # 30 minutes from now
-    
+
     for t in trains:
         dest = t.get("destination", "")
         timestamp = t.get("timestamp", 0)
-        
+        number = t.get("number")
+
+        # Skip the train we just tracked
+        if number == exclude:
+            continue
+
         # Only consider trains departing in the next 30 minutes
         if timestamp < now_ms or timestamp > max_future_ms:
             continue
-        
+
         if any(d in dest for d in TARGET_DESTINATIONS):
-            print(f"🎯 Selected: Train {t['number']} → {t['destination']} @ {t['time']}")
-            return t["number"]
+            print(f"🎯 Selected: Train {number} → {dest} @ {t['time']}")
+            return number
     return None
 
 
@@ -133,16 +143,20 @@ async def keep_alive(ws):
             break
 
 
-async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine):
-    """
-    Subscribe to live train data via BBOX and feed state changes
-    into the state machine.
-    """
-    # Set up BBOX subscription for SBM (S-Bahn München) region
+async def subscribe_bbox(ws):
+    """Subscribe to live BBOX data (call once per WebSocket connection)."""
     await ws.send("BUFFER 100 100")
     await asyncio.sleep(0.1)
     await ws.send("BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm")
-    print(f"📡 Subscribed to live data, watching for train {train_number}...\n")
+    print("📡 Subscribed to BBOX live data\n")
+
+
+async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine):
+    """
+    Feed live train data into the state machine until the SM enters WAITING_AT_NONAME.
+    Returns so the caller can pick the next train and call again.
+    """
+    print(f"👁️  Watching for train {train_number}...\n")
 
     last_real_state = None  # Track the real train's last reported state
 
@@ -173,6 +187,11 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine)
         except Exception as e:
             print(f"❌ Error processing update: {e}")
             traceback.print_exc()
+
+        # Exit once the SM has finished with this train and is back at noname
+        if sm.state == State.WAITING_AT_NONAME:
+            print("\n🏁 Train cycle complete. Waiting for next train...\n")
+            return
 
 
 def _process_train_update(
@@ -273,56 +292,52 @@ async def main():
         keepalive_task = asyncio.create_task(keep_alive(ws))
 
         try:
-            # Step 1: Find our station and pick a train
+            # Subscribe to BBOX once for the lifetime of this WebSocket connection
+            await subscribe_bbox(ws)
+
+            # Get station UIC once
             uic = await get_station_uic(ws, "Fasanenpark")
             if not uic:
                 print("❌ Could not find Fasanenpark station")
                 return
 
-            trains = await get_incoming_trains(ws, uic)
-            if not trains:
-                print("❌ No trains found in timetable")
-                return
-
-            print(f"\n📋 Timetable ({len(trains)} trains):")
-            for t in trains:
-                marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
-                print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}")
-
-            train_number = pick_target_train(trains)
-            if not train_number:
-                print(f"❌ No train found going to {TARGET_DESTINATIONS}")
-                return
-
-            print(f"\n{'='*60}")
-            print(f"  TRACKING TRAIN {train_number}")
-            print(f"  State machine: {sm.state.name}")
-            print(f"{'='*60}\n")
-
-            # Step 2: Run state machine with live data + keyboard input
-            tracking_task = asyncio.create_task(
-                track_with_state_machine(ws, train_number, sm)
-            )
+            # Start stdin listener as a long-running background task
             stdin_task = asyncio.create_task(stdin_listener(sm))
 
-            # Wait for either to finish (stdin quit or connection drop)
-            done, pending = await asyncio.wait(
-                [tracking_task, stdin_task],
-                return_when=asyncio.FIRST_EXCEPTION,
-            )
+            # Main loop: pick next train → track it → repeat
+            last_train_number: int | None = None
+            while True:
+                trains = await get_incoming_trains(ws, uic)
+                if not trains:
+                    print("❌ No trains found in timetable, retrying in 30s...")
+                    await asyncio.sleep(30)
+                    continue
 
-            # Cancel remaining tasks
-            for task in pending:
-                task.cancel()
+                print(f"\n📋 Timetable ({len(trains)} trains):")
+                for t in trains:
+                    marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
+                    skip = " (last, skipping)" if t["number"] == last_train_number else ""
+                    print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
 
-            # Re-raise any exceptions
-            for task in done:
-                if task.exception() and not isinstance(task.exception(), KeyboardInterrupt):
-                    raise task.exception()
+                train_number = pick_target_train(trains, exclude=last_train_number)
+                if not train_number:
+                    print(f"⏳ No suitable train in the next 30 minutes, retrying in 60s...")
+                    await asyncio.sleep(60)
+                    continue
+
+                print(f"\n{'='*60}")
+                print(f"  TRACKING TRAIN {train_number}")
+                print(f"  State machine: {sm.state.name}")
+                print(f"{'='*60}\n")
+
+                await track_with_state_machine(ws, train_number, sm)
+                # SM is now in WAITING_AT_NONAME — remember this train so we don't re-pick it
+                last_train_number = train_number
 
         except KeyboardInterrupt:
             print("\n👋 Stopped by user")
         finally:
+            stdin_task.cancel()
             keepalive_task.cancel()
             try:
                 await keepalive_task
