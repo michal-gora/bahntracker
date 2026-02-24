@@ -355,8 +355,9 @@ async def main():
                         except asyncio.CancelledError:
                             pass
 
-            except websockets.exceptions.ConnectionClosedError as e:
-                print(f"\n🔌 WebSocket connection lost ({e}). Reconnecting in 5s...")
+            except websockets.exceptions.ConnectionClosed as e:
+                print(f"\n🔌 WebSocket connection closed ({e}). Reconnecting in 5s...")
+                last_train_number = None  # allow re-picking the same train after reconnect
                 await asyncio.sleep(5)
             except OSError as e:
                 print(f"\n🔌 Network error ({e}). Reconnecting in 10s...")
