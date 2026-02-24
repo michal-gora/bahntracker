@@ -40,8 +40,8 @@ class StationOutput(ABC):
     """Abstract interface: Server → Station Display."""
 
     @abstractmethod
-    def send_station(self, name: str, valid: bool):
-        """Send STATION:name:valid or STATION:name:invalid."""
+    def send_station(self, name: str, state: str):
+        """Send STATION:name:STATE (e.g. STATION:Marienplatz:AT_STATION_VALID)."""
         ...
 
     @abstractmethod

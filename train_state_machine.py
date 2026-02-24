@@ -198,19 +198,19 @@ class TrainStateMachine:
         elif s == State.AT_STATION_VALID:
             self.model.send_stop()
             name = self._current_station_name()
-            self.station.send_station(name, valid=True)
+            self.station.send_station(name, State.AT_STATION_VALID.name)
             print(f"[{now}]   → Model: STOP | Station: {name} ✅")
 
         elif s == State.AT_STATION_WAITING:
             self.model.send_stop()
             name = self._current_station_name()
-            self.station.send_station(name, valid=False)
+            self.station.send_station(name, State.AT_STATION_WAITING.name)
             print(f"[{now}]   → Model: STOP | Station: {name} ❌ (waiting)")
 
         elif s == State.DRIVING:
             self.model.send_speed(self.travel_speed)
             name = self._current_station_name()  # current_station_index IS our destination after increment
-            self.station.send_station(name, valid=False)
+            self.station.send_station(name, State.DRIVING.name)
             print(f"[{now}]   → Model: SPEED:{self.travel_speed:.2f} | Station: → {name}")
 
         elif s == State.DRIVING_TO_NONAME:
@@ -221,7 +221,7 @@ class TrainStateMachine:
         elif s == State.RUNNING_TO_STATION:
             self.model.send_speed(self.MAX_SPEED)
             name = self._current_station_name()  # current_station_index IS our destination after increment
-            self.station.send_station(name, valid=False)
+            self.station.send_station(name, State.RUNNING_TO_STATION.name)
             print(f"[{now}]   → Model: SPEED:1.0 (catch-up!) | Station: → {name}")
 
     # ── Helpers ─────────────────────────────────────────────────────────

@@ -155,16 +155,16 @@ def start_socket_client():
                     print("Received PONG")
 
                 elif line_str.startswith("STATION:"):
-                    # STATION:name:valid   → display name, validity = "valid"
-                    # STATION:name:invalid → display name, validity = "invalid"
-                    # STATION:clear        → clear display
+                    # STATION:name:STATE  → display name with state
+                    #   STATE = AT_STATION_VALID | AT_STATION_WAITING | DRIVING | RUNNING_TO_STATION
+                    # STATION:clear       → clear display
                     parts = line_str.split(":", 2)
                     if len(parts) == 2 and parts[1] == "clear":
                         display_clear()
                     elif len(parts) == 3:
                         station_name = parts[1]
-                        validity = parts[2]  # "valid" or "invalid"
-                        display_text(station_name, validity)
+                        state = parts[2]  # e.g. "AT_STATION_VALID"
+                        display_text(station_name, state)
                     else:
                         print(f"Unknown STATION format: {line_str}")
                 elif line_str == "ACK":

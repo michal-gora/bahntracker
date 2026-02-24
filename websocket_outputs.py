@@ -80,7 +80,7 @@ class WebSocketStationOutput(StationOutput):
                 print(f"❌ Error sending to station: {e}")
                 self.connected = False
 
-    def send_station(self, name: str, valid: bool):
+    def send_station(self, name: str, state: str):
         """Send STATION:name:valid or STATION:name:invalid."""
         validity = "valid" if valid else "invalid"
         if self.websocket:

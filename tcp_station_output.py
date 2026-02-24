@@ -5,7 +5,7 @@ Architecture: Server runs a plain TCP server. The station display (MicroPython
 on PSoC 6) connects as a TCP client. Messages are newline-terminated text.
 
 Protocol:
-    Server → Station:  STATION:name:valid\n  |   STATION:name:invalid\n  |   STATION:clear\n
+    Server → Station:  STATION:name:STATE\n  (STATE = AT_STATION_VALID | AT_STATION_WAITING | DRIVING | RUNNING_TO_STATION)  |   STATION:clear\n
     Station → Server:  HELLO:STATION\n  |   PING\n
     Server → Station:  ACK\n  (after HELLO)  |   PONG\n  (after PING)
 """
@@ -63,11 +63,10 @@ class TcpStationOutput(StationOutput):
                 print(f"❌ Error sending to station display: {e}")
                 self.connected = False
 
-    def send_station(self, name: str, valid: bool):
-        """Send STATION:name:valid or STATION:name:invalid."""
-        status = "valid" if valid else "invalid"
-        self._do_send(f"STATION:{name}:{status}\n")
-        print(f"📤 → Station: {name} ({status})")
+    def send_station(self, name: str, state: str):
+        """Send STATION:name:STATE."""
+        self._do_send(f"STATION:{name}:{state}\n")
+        print(f"📤 → Station: {name} ({state})")
 
     def send_clear(self):
         """Send STATION:clear."""
