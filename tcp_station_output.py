@@ -31,11 +31,20 @@ class TcpStationOutput(StationOutput):
     def __init__(self):
         self.writer: asyncio.StreamWriter | None = None
         self.connected = False
+        self._last_message: str | None = None  # cached for replay on reconnect
 
     def set_writer(self, writer: asyncio.StreamWriter):
         self.writer = writer
         self.connected = True
         print("🔌 Station display connected (TCP)")
+        # Immediately replay the last known state so the display is up to date
+        if self._last_message:
+            try:
+                writer.write(self._last_message.encode())
+                asyncio.create_task(writer.drain())
+                print(f"📤 → Station (replay): {self._last_message.strip()}")
+            except Exception as e:
+                print(f"❌ Error replaying state to station display: {e}")
 
     def disconnect(self):
         self.writer = None
@@ -43,7 +52,8 @@ class TcpStationOutput(StationOutput):
         print("⚠️  Station display disconnected")
 
     def _do_send(self, message: str):
-        """Queue a message to the station display (non-blocking)."""
+        """Cache and queue a message to the station display (non-blocking)."""
+        self._last_message = message
         if self.writer and self.connected:
             try:
                 self.writer.write(message.encode())
