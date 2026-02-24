@@ -137,7 +137,7 @@ async def keep_alive(ws):
     """Send a WebSocket-level ping frame every 15 seconds to keep the connection alive."""
     while True:
         try:
-            await asyncio.sleep(15)
+            await asyncio.sleep(7)
             await ws.ping()
         except Exception:
             break
