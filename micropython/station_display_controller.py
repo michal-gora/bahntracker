@@ -28,21 +28,24 @@ RECONNECT_DELAY = 5     # seconds - wait before reconnecting
 i2c = I2C(sda=Pin("P6_1"), scl=Pin("P6_0"))
 LCD = I2C_LCD1602(i2c)
 
-def display_init():
-    """Initialize the display hardware. Called once at startup."""
-    LCD.clear()
-    LCD.print("Hello, world!")
-    print("Display init")
-
-def display_text(line1: str, line2: str = ""):
-    """Show text on the display. line1 = top row, line2 = bottom row."""
-    LCD.print(f"{line1}\n{line2}")
-    print(f"Display: [{line1}] [{line2}]")
-
 def display_clear():
     """Clear the display."""
     LCD.clear()
     print("Display: clear")
+
+def display_text(line1: str, line2: str = ""):
+    """Show text on the display. line1 = top row, line2 = bottom row."""
+    display_clear()
+    LCD.puts(f"{line1.strip()[:16]}", y=0)
+    LCD.puts(f"{line2.strip()[:16]}", y=1)
+    print(f"Display: [{line1}] [{line2}]")
+
+def display_init():
+    """Initialize the display hardware. Called once at startup."""
+    display_clear()
+    display_text("Hello, world!")
+    print("Display init")
+
 
 # ============================================================
 
@@ -63,7 +66,7 @@ def start_socket_client():
                 s.connect((SERVER_IP, SERVER_PORT))
                 s.setblocking(False)  # Set non-blocking after connect
 
-                print(f"Connected to server at {SERVER_IP}:{SERVER_PORT}")
+                print(f"Connecting to server at {SERVER_IP}:{SERVER_PORT}")
 
                 # Send HELLO handshake
                 s.write(b"HELLO:STATION\n")
@@ -164,7 +167,9 @@ def start_socket_client():
                         display_text(station_name, validity)
                     else:
                         print(f"Unknown STATION format: {line_str}")
-
+                elif line_str == "ACK":
+                    display_text("Connected")
+                    print("Successfully connected")
                 # Ignore unknown messages silently (could be ACK or other server messages)
 
         except OSError as e:
