@@ -153,8 +153,9 @@ async def subscribe_bbox(ws):
 
 async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine):
     """
-    Feed live train data into the state machine until the SM enters WAITING_AT_NONAME.
-    Returns so the caller can pick the next train and call again.
+    Feed live train data into the state machine until the real train departs Fasanenpark
+    (SM enters DRIVING_TO_NONAME). From that point the model runs autonomously back to
+    noname and waits for the next train — no more API input needed for this cycle.
     """
     print(f"👁️  Watching for train {train_number}...\n")
 
@@ -188,9 +189,10 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine)
             print(f"❌ Error processing update: {e}")
             traceback.print_exc()
 
-        # Exit once the SM has finished with this train and is back at noname
-        if sm.state == State.WAITING_AT_NONAME:
-            print("\n🏁 Train cycle complete. Waiting for next train...\n")
+        # Once the real train departs Fasanenpark the SM drives back to noname on its own.
+        # No more API updates are needed for this train — return so the caller can pick the next one.
+        if sm.state == State.DRIVING_TO_NONAME:
+            print("\n🏁 Train passed Fasanenpark. Model returning to noname autonomously...\n")
             return
 
 
@@ -331,8 +333,15 @@ async def main():
                 print(f"{'='*60}\n")
 
                 await track_with_state_machine(ws, train_number, sm)
-                # SM is now in WAITING_AT_NONAME — remember this train so we don't re-pick it
                 last_train_number = train_number
+
+                # SM is in DRIVING_TO_NONAME — wait for the HALL sensor to fire before
+                # picking the next train, otherwise a BOARDING event from the new train
+                # would arrive while the SM can't accept it and would be lost.
+                if sm.state != State.WAITING_AT_NONAME:
+                    print("⏳ Waiting for model to reach noname (HALL sensor)...")
+                    while sm.state != State.WAITING_AT_NONAME:
+                        await asyncio.sleep(0.5)
 
         except KeyboardInterrupt:
             print("\n👋 Stopped by user")
