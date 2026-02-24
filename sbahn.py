@@ -77,19 +77,21 @@ async def get_incoming_trains(ws, uic: str, max_trains: int = 100) -> list:
                     content = data.get("content", {})
                     train_number = content.get("train_number")
                     destination = (content.get("to") or ["Unknown"])[0]
-                    time_ms = content.get("time", 0)
-                    time_str = datetime.fromtimestamp(time_ms / 1000).strftime("%H:%M")
+                    aimed_ms = content.get("aimedDepartureTime") or content.get("time", 0)
+                    estimated_ms = content.get("departureTime") or aimed_ms
+                    time_str = datetime.fromtimestamp(aimed_ms / 1000).strftime("%H:%M")
                     state = content.get("state")
-                    
+
                     # Filter out trains that are clearly not running (CANCELLED state if it exists)
                     if state == "CANCELLED":
                         continue
-                    
+
                     trains.append({
                         "number": train_number,
                         "destination": destination,
                         "time": time_str,
-                        "timestamp": time_ms,
+                        "timestamp": aimed_ms,        # scheduled (no delay) — used as base for live delay updates
+                        "estimated_ms": estimated_ms, # current best estimate including known delay
                         "state": state,
                         "has_realtime": content.get("has_realtime_journey", False),
                     })
@@ -335,6 +337,13 @@ async def main():
                             print(f"{'='*60}\n")
 
                             scheduled_ms = next(t["timestamp"] for t in trains if t["number"] == train_number)
+                            estimated_ms = next(t["estimated_ms"] for t in trains if t["number"] == train_number)
+
+                            # Send initial ETA immediately using departureTime (already includes known delay).
+                            # Will be refined on every live API update as delay changes.
+                            sm.eta_to_fasanenpark = int(estimated_ms / 1000)
+                            sm.station.send_eta(sm.eta_to_fasanenpark)
+
                             await track_with_state_machine(ws, train_number, sm, scheduled_ms)
                             last_train_number = train_number
 

@@ -73,7 +73,11 @@ class TcpStationOutput(StationOutput):
         """Send ETA:<unix_timestamp> or ETA:none."""
         self._last_eta_message = f"ETA:{arrival_unix}\n" if arrival_unix is not None else "ETA:none\n"
         self._write(self._last_eta_message)
-        eta_str = str(arrival_unix) if arrival_unix is not None else "none"
+        if arrival_unix is not None:
+            from datetime import datetime
+            eta_str = datetime.fromtimestamp(arrival_unix).strftime("%H:%M:%S")
+        else:
+            eta_str = "none"
         print(f"📤 → Station ETA: {eta_str}")
 
     def send_clear(self):
