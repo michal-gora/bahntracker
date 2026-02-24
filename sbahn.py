@@ -27,6 +27,7 @@ import websockets
 from train_state_machine import TrainStateMachine, State
 from outputs import PrintModelOutput, PrintStationOutput
 from tcp_model_output import TcpModelOutput, tcp_model_server
+from tcp_station_output import TcpStationOutput, tcp_station_server
 
 WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c21e0f441792cfc2fafe3e7a1e"
 
@@ -254,14 +255,15 @@ async def main():
 
     # Create output interfaces
     model = TcpModelOutput()
-    station = PrintStationOutput()  # TODO: replace with real station output later
+    station = TcpStationOutput()
 
     # Create state machine
     sm = TrainStateMachine(model, station, stations)
     print(f"🔧 State machine initialized: {sm.state.name}\n")
 
-    # Start TCP server for model train connection
+    # Start TCP servers
     tcp_server = await tcp_model_server(model, sm)
+    await tcp_station_server(station)
     print()
 
     async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
