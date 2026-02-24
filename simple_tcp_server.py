@@ -99,7 +99,7 @@ def input_thread():
         'l': b"SPEED:1.0\n",
         'f': b"REVERSER:1\n",
         'r': b"REVERSER:0\n",
-        'd': b"DISPLAY:Hello from server!:valid\n",
+        'd': b"STATION:Hello from server!:valid\n",
     }
     
     while True:
