@@ -26,13 +26,23 @@ REVERSER_PIN = "P9_6"
 HALL_PIN = "P9_0"
 
 # Hall sensor settings
-HALL_DEBOUNCE_MS = 200  # milliseconds - ignore triggers within this time
+# A trigger is only confirmed once the pin has stayed LOW continuously for
+# this many milliseconds.  Noise spikes (caused by ground connect/disconnect
+# on the motor controller board) last only a few µs and are therefore
+# filtered out before they can reach the application logic.
+HALL_DEBOUNCE_MS = 30   # ms – pin must stay LOW this long to be confirmed
 HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts
 # ============================================================
 
 # Global state
-hall_triggered: bool = False
-train_started_at: float = 0.0  # timestamp when train last started (speed > 0)
+# hall_pending / hall_pending_since implement debouncing:
+#   The IRQ sets hall_pending = True and records the timestamp.
+#   The main loop only acts when the pin has stayed LOW for at least
+#   HALL_DEBOUNCE_MS ms.  If it goes HIGH first it was just noise.
+hall_pending: bool = False       # falling edge seen, waiting for confirmation
+hall_pending_since: int = 0      # time.ticks_ms() when edge was first seen
+hall_sensor_pin = None           # Pin reference populated in main()
+train_started_at: float = 0.0   # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
 
 is_led_on = True
@@ -81,14 +91,17 @@ def set_reverser(reversed : bool):
 def hall_interrupt(pin):
     """
     IRQ handler for hall effect sensor.
-    Sets a flag that the main loop will process.
+    Records the moment of the first falling edge so the main loop can
+    verify whether the signal stays LOW long enough to be a real trigger.
     """
-    global hall_triggered
-    hall_triggered = True
+    global hall_pending, hall_pending_since
+    if not hall_pending:          # ignore re-triggers while already pending
+        hall_pending = True
+        hall_pending_since = time.ticks_ms()
 
             
 def start_socket_client():
-    global hall_triggered
+    global hall_pending, hall_pending_since, hall_sensor_pin
     
     s = None
     last_ping_sent: float = 0.0
@@ -129,24 +142,33 @@ def start_socket_client():
         
         # Main communication loop
         try:
-            # Check if hall sensor was triggered (from IRQ)
-            if hall_triggered:
-                hall_triggered = False  # Reset flag
-                
-                # Check if we're in startup delay period
-                current_time = time.time()
-                time_since_start = current_time - train_started_at
-                
-                if time_since_start < HALL_STARTUP_DELAY:
-                    print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
-                else:
-                    try:
-                        s.write(b"HALL\n")
-                        set_speed(0.0)  # Stop train on hall trigger
-                        print("Sent HALL")
-                    except OSError as e:
-                        print(f"Failed to send HALL: {e}")
-                        raise
+            # Debounced hall sensor check
+            # Phase 1 – a falling edge was seen by the IRQ; wait for confirmation.
+            # Phase 2 – once the pin has been LOW for HALL_DEBOUNCE_MS ms, act.
+            # If the pin goes HIGH before the window expires it was just noise.
+            if hall_pending:
+                now_ms = time.ticks_ms()
+                if hall_sensor_pin is not None and hall_sensor_pin.value() == 1:
+                    # Pin already went HIGH again → noise, discard
+                    print("Hall noise filtered (pin went HIGH before debounce window)")
+                    hall_pending = False
+                elif time.ticks_diff(now_ms, hall_pending_since) >= HALL_DEBOUNCE_MS:
+                    # Pin stayed LOW long enough – this is a real magnet pass
+                    hall_pending = False
+
+                    current_time = time.time()
+                    time_since_start = current_time - train_started_at
+
+                    if time_since_start < HALL_STARTUP_DELAY:
+                        print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
+                    else:
+                        try:
+                            s.write(b"HALL\n")
+                            set_speed(0.0)  # Stop train on hall trigger
+                            print("Sent HALL (debounce confirmed)")
+                        except OSError as e:
+                            print(f"Failed to send HALL: {e}")
+                            raise
             
             # Watchdog: Check if we need to send PING
             current_time = time.time()
@@ -285,9 +307,10 @@ def main():
     set_speed(0.0)
     
     # Set up hall effect sensor with interrupt
-    hall_sensor = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)
-    hall_sensor.irq(trigger=Pin.IRQ_FALLING, handler=hall_interrupt)
-    print(f"Hall sensor initialized on {HALL_PIN}")
+    global hall_sensor_pin
+    hall_sensor_pin = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)
+    hall_sensor_pin.irq(trigger=Pin.IRQ_FALLING, handler=hall_interrupt)
+    print(f"Hall sensor initialized on {HALL_PIN} (debounce: {HALL_DEBOUNCE_MS} ms)")
 
     # Connect to WiFi with retry
     max_wifi_retries = 5
@@ -336,6 +359,5 @@ if __name__ == "__main__":
     main()
 
 ### TODO:
-# - Add hall effect sensor debouncing
 # - Add error handling for malformed commands
 # - Finally adjust it in sbahn server script to send speed and reverser commands based on state machine logic

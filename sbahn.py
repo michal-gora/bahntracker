@@ -169,6 +169,11 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
     """
     print(f"👁️  Watching for train {train_number}...\n")
 
+    # Only exit when the SM has left WAITING_AT_NONAME and then returned to it.
+    # Without this guard the check would fire immediately on the first message
+    # (since the SM starts in WAITING_AT_NONAME), burning through all trains.
+    departed = False
+
     async for message in ws:
         try:
             data = json.loads(message)
@@ -193,7 +198,9 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
             print(f"❌ Error processing update: {e}")
             traceback.print_exc()
 
-        if sm.state == State.WAITING_AT_NONAME:
+        if sm.state != State.WAITING_AT_NONAME:
+            departed = True
+        elif departed:
             return
 
 
