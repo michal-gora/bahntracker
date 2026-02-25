@@ -104,12 +104,15 @@ async def get_incoming_trains(ws, uic: str, max_trains: int = 100) -> list:
     return trains
 
 
-def pick_target_train(trains: list, exclude: int | None = None) -> int | None:
+def pick_target_train(trains: list, exclude_before_ms: float = 0) -> int | None:
     """Pick first train going to one of our target destinations in the next 30 minutes.
     
     Args:
-        trains:  Timetable list from get_incoming_trains().
-        exclude: Train number to skip (e.g. the one we just finished tracking).
+        trains:           Timetable list from get_incoming_trains().
+        exclude_before_ms: Skip trains whose scheduled timestamp is <= this value.
+                          Pass the scheduled_ms of the last tracked train so stale
+                          timetable entries for already-passed trains are ignored,
+                          even if they still appear as 'upcoming' in the API.
     """
     import time
     now_ms = time.time() * 1000
@@ -120,8 +123,8 @@ def pick_target_train(trains: list, exclude: int | None = None) -> int | None:
         timestamp = t.get("timestamp", 0)
         number = t.get("number")
 
-        # Skip the train we just tracked
-        if number == exclude:
+        # Skip trains at or before the last tracked train's scheduled slot
+        if timestamp <= exclude_before_ms:
             continue
 
         # Only consider trains departing in the next 30 minutes
@@ -295,7 +298,7 @@ async def main():
 
     # These survive WebSocket reconnections
     stdin_task = asyncio.create_task(stdin_listener(sm))
-    last_train_number: int | None = None
+    last_scheduled_ms: float = 0  # scheduled timestamp of the last tracked train
     uic: int | None = None
 
     try:
@@ -314,6 +317,17 @@ async def main():
                                 return
 
                         while True:  # main train loop
+                            # Ensure the model is at noname before picking a new train.
+                            # This guards against reconnects while the model is still
+                            # driving back to noname from the previous cycle.
+                            if sm.state != State.WAITING_AT_NONAME:
+                                print(f"⏳ SM in {sm.state.name}, waiting for model to reach noname before picking next train...")
+                                while sm.state != State.WAITING_AT_NONAME:
+                                    try:
+                                        await asyncio.wait_for(ws.recv(), timeout=0.5)
+                                    except asyncio.TimeoutError:
+                                        pass
+
                             trains = await get_incoming_trains(ws, uic)
                             if not trains:
                                 print("❌ No trains found in timetable, retrying in 30s...")
@@ -323,10 +337,10 @@ async def main():
                             print(f"\n📋 Timetable ({len(trains)} trains):")
                             for t in trains:
                                 marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
-                                skip = " (last, skipping)" if t["number"] == last_train_number else ""
+                                skip = " (already passed, skipping)" if t["timestamp"] <= last_scheduled_ms else ""
                                 print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
 
-                            train_number = pick_target_train(trains, exclude=last_train_number)
+                            train_number = pick_target_train(trains, exclude_before_ms=last_scheduled_ms)
                             if not train_number:
                                 print(f"⏳ No suitable train in the next 30 minutes, retrying in 60s...")
                                 await asyncio.sleep(60)
@@ -346,21 +360,9 @@ async def main():
                             sm.station.send_eta(sm.eta_to_fasanenpark)
 
                             await track_with_state_machine(ws, train_number, sm, scheduled_ms)
-                            last_train_number = train_number
-
-                            # SM is in DRIVING_TO_NONAME — wait for the HALL sensor to fire
-                            # before picking the next train, otherwise a BOARDING event from
-                            # the new train would arrive while the SM can't accept it.
-                            # We must keep reading from the WebSocket during this wait so the
-                            # connection stays alive (unread messages cause flow-control
-                            # backpressure that eventually blocks the server's keepalive pings).
-                            if sm.state != State.WAITING_AT_NONAME:
-                                print("⏳ Waiting for model to reach noname (HALL sensor)...")
-                                while sm.state != State.WAITING_AT_NONAME:
-                                    try:
-                                        await asyncio.wait_for(ws.recv(), timeout=0.5)
-                                    except asyncio.TimeoutError:
-                                        pass
+                            last_scheduled_ms = scheduled_ms
+                            # Loop back to top — the wait-for-WAITING_AT_NONAME check
+                            # at the top of this loop will block until the HALL sensor fires.
 
                     finally:
                         keepalive_task.cancel()
@@ -371,7 +373,7 @@ async def main():
 
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"\n🔌 WebSocket connection closed ({e}). Reconnecting in 5s...")
-                last_train_number = None  # allow re-picking the same train after reconnect
+                last_scheduled_ms = 0  # allow re-picking after reconnect
                 await asyncio.sleep(5)
             except OSError as e:
                 print(f"\n🔌 Network error ({e}). Reconnecting in 10s...")
