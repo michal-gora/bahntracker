@@ -154,18 +154,19 @@ class TrainStateMachine:
             if coordinates:
                 # Re-sync to GPS on every boarding — corrects drift if the API had a
                 # blackout and we miscounted the index during that gap.
-                idx = self._find_nearest_station(coordinates)
-                if idx != self.current_station_index:
-                    old_name = self.stations[self.current_station_index]['name'] if self.current_station_index is not None else "?"
-                    print(f"[{now}] 📍 GPS re-sync: {old_name} (idx {self.current_station_index}) → {self.stations[idx]['name']} (idx {idx})")
-                else:
-                    print(f"[{now}] 📍 GPS confirmed: {self.stations[idx]['name']} (index {idx})")
-                self.current_station_index = idx
+                self._gps_sync_station(coordinates, now)
             elif from_state == State.WAITING_AT_NONAME:
                 # Very first boarding with no GPS: default to first station
                 self.current_station_index = 0
                 print(f"[{now}] ⚠️  No GPS on first boarding, defaulting to first station: {self.stations[0]['name']}")
             # else: no GPS but not first boarding — trust existing counter
+
+        elif new_state == State.RUNNING_TO_STATION:
+            # Real train is boarding at the station the model is running toward.
+            # current_station_index already points there (was incremented on DRIVING entry).
+            # Re-sync from GPS in case we drifted — same logic as AT_STATION_VALID.
+            if coordinates:
+                self._gps_sync_station(coordinates, now)
 
         elif new_state == State.DRIVING:
             # Departing: increment index to point to our destination (next station)
@@ -290,6 +291,16 @@ class TrainStateMachine:
         if self.eta_to_fasanenpark is None:
             return ""
         return f" (ETA Fasanenpark: {datetime.fromtimestamp(self.eta_to_fasanenpark).strftime('%H:%M')})"
+
+    def _gps_sync_station(self, coordinates: list, now: str):
+        """Re-sync current_station_index from GPS coordinates (called on BOARDING events)."""
+        idx = self._find_nearest_station(coordinates)
+        if idx != self.current_station_index:
+            old_name = self.stations[self.current_station_index]['name'] if self.current_station_index is not None else "?"
+            print(f"[{now}] 📍 GPS re-sync: {old_name} (idx {self.current_station_index}) → {self.stations[idx]['name']} (idx {idx})")
+        else:
+            print(f"[{now}] 📍 GPS confirmed: {self.stations[idx]['name']} (index {idx})")
+        self.current_station_index = idx
 
     def _find_nearest_station(self, coordinates: list) -> int:
         """Find the station closest to the given [lon, lat] coordinates."""
