@@ -1,4 +1,5 @@
 import wifi
+import ntptime
 import socket
 import time
 from time import sleep_ms
@@ -6,6 +7,16 @@ import errno
 import machine
 from machine import I2C, Pin
 from mp_i2c_lcd1602 import I2C_LCD1602
+
+def unix_time() -> int:
+    """Return current Unix timestamp in seconds (correct after NTP sync).
+    Reads from the RTC (set by ntptime.settime()) and converts via time.mktime().
+    On this MicroPython port, time.mktime() returns seconds since the Unix epoch
+    (1970-01-01), so no offset adjustment is needed.
+    """
+    dt = machine.RTC().datetime()
+    # dt = (year, month, day, weekday, hour, minute, second, subsecond)
+    return time.mktime((dt[0], dt[1], dt[2], dt[4], dt[5], dt[6], dt[3], 0))
 
 # ============================================================
 # CONFIGURATION
@@ -63,7 +74,7 @@ def start_socket_client():
     waiting_for_pong: bool = False
     eta_unix: int | None = None
     last_eta_display: float = 0.0
-    ETA_DISPLAY_INTERVAL = 1  # seconds between ETA log updates
+    ETA_DISPLAY_INTERVAL = 30  # seconds between ETA display updates
 
     while True:
         # Connection/reconnection loop
@@ -83,7 +94,7 @@ def start_socket_client():
                 print("Sent HELLO:STATION")
 
                 # Reset watchdog timers
-                last_ping_sent = time.time()
+                last_ping_sent = time.ticks_ms() // 1000
                 waiting_for_pong = False
 
             except OSError as e:
@@ -101,7 +112,10 @@ def start_socket_client():
         # Main communication loop
         try:
             # Watchdog: send PING
-            current_time = time.time()
+            # Use ticks_ms()//1000 for monotonic seconds since boot.
+            # time.time() on this port returns microseconds (not seconds since epoch)
+            # and is therefore not suitable for interval comparisons.
+            current_time = time.ticks_ms() // 1000
             if current_time - last_ping_sent >= PING_INTERVAL:
                 try:
                     s.write(b"PING\n")
@@ -192,8 +206,6 @@ def start_socket_client():
                         except ValueError:
                             print(f"Invalid ETA value: {value}")
                             eta_unix = None
-                    # TODO: implement display logic (eta_unix is seconds since epoch,
-                    # use time.time() to compute remaining seconds for countdown)
 
                 elif line_str == "ACK":
                     display_text("Connected")
@@ -202,7 +214,7 @@ def start_socket_client():
 
             # Periodically display remaining ETA
             if eta_unix is not None and current_time - last_eta_display >= ETA_DISPLAY_INTERVAL:
-                remaining = eta_unix - int(current_time)
+                remaining = eta_unix - unix_time()
                 display_eta(remaining)
                 last_eta_display = current_time
         except OSError as e:
@@ -241,6 +253,12 @@ def main():
         try:
             if wifi.network_connect():
                 print("WiFi connected")
+                # Sync RTC via NTP so unix_time() returns correct Unix timestamps
+                try:
+                    ntptime.settime()
+                    print(f"NTP sync done, unix_time={unix_time()}")
+                except Exception as e:
+                    print(f"NTP sync failed: {e} (ETA countdown will be wrong)")
                 break
             else:
                 print(f"WiFi connection failed")
