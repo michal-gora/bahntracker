@@ -306,7 +306,7 @@ def start_socket_client():
                 continue
 
         # Do other tasks here...
-        time.sleep_ms(20)
+        time.sleep_ms(10)
 
 def main():
     global led, is_led_on
