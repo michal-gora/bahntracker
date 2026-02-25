@@ -77,6 +77,18 @@ class TrainStateMachine:
         new_state = self._transition_on_api(new_api_state, coordinates)
         if new_state and new_state != old_state:
             self._enter_state(new_state, from_state=old_state, coordinates=coordinates)
+        elif self.state == State.WAITING_AT_NONAME and coordinates:
+            # No state transition, but real train is moving — update approaching station display.
+            # Uses latitude ordering: the S3 runs strictly south→north so the approaching
+            # station is simply the first one whose lat exceeds the train's current lat.
+            lat = coordinates[1]
+            idx = self._find_approaching_station(lat)
+            if idx != self.current_station_index:
+                self.current_station_index = idx
+                name = self.stations[idx]['name']
+                now = datetime.now().strftime('%H:%M:%S')
+                print(f"[{now}] 🔭 Approaching: {name} (idx {idx})")
+                self.station.send_station(name, State.WAITING_AT_NONAME.name)
 
     def on_hall_sensor(self):
         """Called when the model train's hall sensor triggers (arrived at a station)."""
@@ -204,8 +216,8 @@ class TrainStateMachine:
 
         if s == State.WAITING_AT_NONAME:
             self.model.send_stop()
-            # self.station.send_clear() # TODO should we clear the station display when parked at noname? Or show "noname"?
-            print(f"[{now}]   → Model: STOP | Station: clear")
+            self.station.send_clear()
+            print(f"[{now}]   → Model: STOP | Station: clear (waiting for next train)")
 
         elif s == State.AT_STATION_VALID:
             self.model.send_stop()
@@ -301,6 +313,18 @@ class TrainStateMachine:
         else:
             print(f"[{now}] 📍 GPS confirmed: {self.stations[idx]['name']} (index {idx})")
         self.current_station_index = idx
+
+    def _find_approaching_station(self, lat: float) -> int:
+        """Find the station the northbound train is approaching based on latitude.
+
+        The S3 Holzkirchen→Fasanenpark route is strictly south→north (increasing lat),
+        so the approaching station is the first one whose lat exceeds the train's lat.
+        If the train is already past all stations, returns the last index.
+        """
+        for i, station in enumerate(self.stations):
+            if station.get('lat', 0) > lat:
+                return i
+        return len(self.stations) - 1
 
     def _find_nearest_station(self, coordinates: list) -> int:
         """Find the station closest to the given [lon, lat] coordinates."""
