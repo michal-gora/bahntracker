@@ -44,15 +44,24 @@ def display_clear(arg: int = -1):
     if arg == 0:
         LCD.puts(" " * 16, y=0)
     elif arg == 1:
-        LCD.puts(" " * 16, y=1)
+        LCD.puts(" " * 15, y=1)
+    elif arg == 2:
+        LCD.puts(" ", x=15, y=1)
     else:
         LCD.clear()
     print("Display: clear")
 
 def display_text(line: str, arg : int = 0):
-    """Show text on the display. line1 = top row, line2 = bottom row."""
+    """Show text on the display. line1 = top row, line2 = bottom row.
+    Args:
+        line: The text to display (will be truncated to fit).
+        arg: Which element to update (0 = top row, 1 = bottom row, 2 = status indicator bottom right)
+    """
     display_clear(arg)
-    LCD.puts(f"{line.strip()[:16]}", y=arg)
+    if arg in (0, 1):
+        LCD.puts(f"{line.strip()[:16]}", y=arg)
+    elif arg == 2:
+        LCD.puts(line.strip()[:1], x=15, y=1)
     print(f"Display: [{line}] with arg={arg}")
 
 def display_eta(remaining_seconds: int):
@@ -185,7 +194,10 @@ def start_socket_client():
                         station_name = parts[1]
                         state = parts[2]
                         display_text(station_name, 0)
-                        # display_text(state, 1)
+                        if state == "AT_STATION_VALID" or state == "RUNNING_TO_STATION":
+                            display_text("B", 2)
+                        else:
+                            display_text(" ", 2)  # clear status indicator
                     else:
                         print(f"Unknown STATION format: {line_str}")
 
