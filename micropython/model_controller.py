@@ -26,23 +26,22 @@ REVERSER_PIN = "P9_6"
 HALL_PIN = "P9_0"
 
 # Hall sensor settings
-# A trigger is only confirmed once the pin has stayed LOW continuously for
-# this many milliseconds.  Noise spikes (caused by ground connect/disconnect
-# on the motor controller board) last only a few µs and are therefore
-# filtered out before they can reach the application logic.
-HALL_DEBOUNCE_MS = 30   # ms – pin must stay LOW this long to be confirmed
+# Debouncing logic:
+#   Falling edge IRQ : start timing (set hall_measuring, record hall_fall_time)
+#   Rising edge IRQ  : cancel if not yet confirmed (pin went HIGH = noise)
+#   Main loop        : if pin is STILL LOW after HALL_MIN_LOW_MS → confirmed
+# This means HALL is sent while the magnet is present, not after it leaves.
+# Noise spikes go HIGH before the main loop check and are cancelled by the
+# rising-edge IRQ.
+HALL_MIN_LOW_MS = 5    # ms – pin must stay LOW this long to confirm a trigger
 HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts
 # ============================================================
 
 # Global state
-# hall_pending / hall_pending_since implement debouncing:
-#   The IRQ sets hall_pending = True and records the timestamp.
-#   The main loop only acts when the pin has stayed LOW for at least
-#   HALL_DEBOUNCE_MS ms.  If it goes HIGH first it was just noise.
-hall_pending: bool = False       # falling edge seen, waiting for confirmation
-hall_pending_since: int = 0      # time.ticks_ms() when edge was first seen
-hall_sensor_pin = None           # Pin reference populated in main()
-train_started_at: float = 0.0   # timestamp when train last started (speed > 0)
+hall_triggered: bool = False  # set by rising-edge IRQ when LOW duration is long enough
+hall_measuring: bool = False  # True after a falling edge, reset after rising edge
+hall_fall_time: int = 0       # time.ticks_ms() recorded at falling edge
+train_started_at: float = 0.0    # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
 
 is_led_on = True
@@ -52,6 +51,7 @@ reverser_pin = REVERSER_PIN
 
 pwm = PWM(pwm_pin, freq=1000, duty_u16=0)
 reverser = Pin(reverser_pin, Pin.OUT)
+hall_sensor = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)
 led = None
 
 def toggle_led():
@@ -88,20 +88,32 @@ def set_reverser(reversed : bool):
     global reverser
     reverser.value(reversed)
 
-def hall_interrupt(pin):
+def hall_fall_interrupt(pin):
+    """Falling edge: pin went LOW. Start timing.
+    Ignored if hall_triggered is already set (main loop hasn't processed yet)
+    or if we are already measuring a previous edge.
     """
-    IRQ handler for hall effect sensor.
-    Records the moment of the first falling edge so the main loop can
-    verify whether the signal stays LOW long enough to be a real trigger.
+    global hall_measuring, hall_fall_time
+    if hall_triggered or hall_measuring:
+        return
+    hall_measuring = True
+    hall_fall_time = time.ticks_ms()
+
+def hall_rise_interrupt(pin):
+    """Rising edge: pin went HIGH. Check if the LOW duration was long enough:
+    - Yes → real trigger, set hall_triggered (main loop may not have seen it yet)
+    - No  → too short, was just noise, discard
     """
-    global hall_pending, hall_pending_since
-    if not hall_pending:          # ignore re-triggers while already pending
-        hall_pending = True
-        hall_pending_since = time.ticks_ms()
+    global hall_triggered, hall_measuring
+    if hall_measuring:
+        hall_measuring = False
+        if time.ticks_diff(time.ticks_ms(), hall_fall_time) >= HALL_MIN_LOW_MS:
+            hall_triggered = True  # fast pass: confirmed on the way out
+        # else: too short – noise, discard
 
             
 def start_socket_client():
-    global hall_pending, hall_pending_since, hall_sensor_pin
+    global hall_triggered, hall_measuring
     
     s = None
     last_ping_sent: float = 0.0
@@ -142,33 +154,29 @@ def start_socket_client():
         
         # Main communication loop
         try:
-            # Debounced hall sensor check
-            # Phase 1 – a falling edge was seen by the IRQ; wait for confirmation.
-            # Phase 2 – once the pin has been LOW for HALL_DEBOUNCE_MS ms, act.
-            # If the pin goes HIGH before the window expires it was just noise.
-            if hall_pending:
-                now_ms = time.ticks_ms()
-                if hall_sensor_pin is not None and hall_sensor_pin.value() == 1:
-                    # Pin already went HIGH again → noise, discard
-                    print("Hall noise filtered (pin went HIGH before debounce window)")
-                    hall_pending = False
-                elif time.ticks_diff(now_ms, hall_pending_since) >= HALL_DEBOUNCE_MS:
-                    # Pin stayed LOW long enough – this is a real magnet pass
-                    hall_pending = False
+            # Hall sensor check
+            # Slow pass: pin still LOW and enough time has elapsed → confirm now.
+            # Fast pass: already confirmed by rising-edge IRQ, hall_triggered is set.
+            if hall_measuring and time.ticks_diff(time.ticks_ms(), hall_fall_time) >= HALL_MIN_LOW_MS:
+                hall_measuring = False
+                hall_triggered = True
 
-                    current_time = time.time()
-                    time_since_start = current_time - train_started_at
+            if hall_triggered:
+                hall_triggered = False
 
-                    if time_since_start < HALL_STARTUP_DELAY:
-                        print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
-                    else:
-                        try:
-                            s.write(b"HALL\n")
-                            set_speed(0.0)  # Stop train on hall trigger
-                            print("Sent HALL (debounce confirmed)")
-                        except OSError as e:
-                            print(f"Failed to send HALL: {e}")
-                            raise
+                current_time = time.time()
+                time_since_start = current_time - train_started_at
+
+                if time_since_start < HALL_STARTUP_DELAY:
+                    print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
+                else:
+                    try:
+                        s.write(b"HALL\n")
+                        set_speed(0.0)  # Stop train on hall trigger
+                        print(f"Sent HALL")
+                    except OSError as e:
+                        print(f"Failed to send HALL: {e}")
+                        raise
             
             # Watchdog: Check if we need to send PING
             current_time = time.time()
@@ -298,7 +306,7 @@ def start_socket_client():
                 continue
 
         # Do other tasks here...
-        time.sleep(0.1)
+        time.sleep_ms(20)
 
 def main():
     global led, is_led_on
@@ -307,10 +315,11 @@ def main():
     set_speed(0.0)
     
     # Set up hall effect sensor with interrupt
-    global hall_sensor_pin
-    hall_sensor_pin = Pin(HALL_PIN, Pin.IN, Pin.PULL_UP)
-    hall_sensor_pin.irq(trigger=Pin.IRQ_FALLING, handler=hall_interrupt)
-    print(f"Hall sensor initialized on {HALL_PIN} (debounce: {HALL_DEBOUNCE_MS} ms)")
+    # MicroPython only supports one IRQ per pin, so we combine both edges into
+    # one handler and dispatch by reading the current pin value.
+    hall_sensor.irq(trigger=Pin.IRQ_FALLING | Pin.IRQ_RISING,
+                    handler=lambda p: hall_fall_interrupt(p) if p.value() == 0 else hall_rise_interrupt(p))
+    print(f"Hall sensor initialized on {HALL_PIN} (min LOW: {HALL_MIN_LOW_MS} ms)")
 
     # Connect to WiFi with retry
     max_wifi_retries = 5
