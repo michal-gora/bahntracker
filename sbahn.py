@@ -33,6 +33,7 @@ WS_URL = "wss://api.geops.io/realtime-ws/v1/?key=5cc87b12d7c5370001c1d655112ec5c
 
 # Destinations we're looking for
 TARGET_DESTINATIONS = ["Mammendorf", "Maisach"]
+PING_TIMEOUT = 10  # seconds - if no PING received from geops.io, consider connection dead
 
 
 def load_stations(path: str = "travel_times.json") -> list:
@@ -139,7 +140,7 @@ async def keep_alive(ws):
     """Send a text PING message every 10 seconds — required by the geops.io API to keep the connection alive."""
     while True:
         try:
-            await asyncio.sleep(10)
+            await asyncio.sleep(PING_TIMEOUT)
             await ws.send("PING")
         except Exception:
             break
