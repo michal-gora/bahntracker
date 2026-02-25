@@ -39,22 +39,27 @@ RECONNECT_DELAY = 5     # seconds - wait before reconnecting
 i2c = I2C(sda=Pin("P6_1"), scl=Pin("P6_0"))
 LCD = I2C_LCD1602(i2c)
 
-def display_clear():
+def display_clear(arg: int = -1):
     """Clear the display."""
-    LCD.clear()
+    if arg == 0:
+        LCD.puts(" " * 16, y=0)
+    elif arg == 1:
+        LCD.puts(" " * 16, y=1)
+    else:
+        LCD.clear()
     print("Display: clear")
 
-def display_text(line1: str, line2: str = ""):
+def display_text(line: str, arg : int = 0):
     """Show text on the display. line1 = top row, line2 = bottom row."""
-    display_clear()
-    LCD.puts(f"{line1.strip()[:16]}", y=0)
-    LCD.puts(f"{line2.strip()[:16]}", y=1)
-    print(f"Display: [{line1}] [{line2}]")
+    display_clear(arg)
+    LCD.puts(f"{line.strip()[:16]}", y=arg)
+    print(f"Display: [{line}] with arg={arg}")
 
 def display_eta(remaining_seconds: int):
     """Show remaining time until train arrives at Fasanenpark."""
     mins = remaining_seconds // 60
     secs = remaining_seconds % 60
+    display_text(f"ETA: {mins}m {secs:02d}s", 1)
     print(f"ETA display: {mins}m {secs:02d}s remaining")
 
 
@@ -70,11 +75,15 @@ def display_init():
 
 def start_socket_client():
     s = None
-    last_ping_sent: float = 0.0
+    # time.time() returns epoch seconds after NTP sync — use it for all interval
+    # tracking. ticks_ms/ticks_us are unusable here: their TICKS_PERIOD is only
+    # 15000 (shared for both ms and µs on this port), so ticks_diff saturates
+    # at 7.5 s — less than the 10 s PING_INTERVAL.
+    last_ping_sent: int = 0
     waiting_for_pong: bool = False
     eta_unix: int | None = None
-    last_eta_display: float = 0.0
-    ETA_DISPLAY_INTERVAL = 30  # seconds between ETA display updates
+    last_eta_display: int = 0    # raw ticks_ms() value
+    ETA_DISPLAY_INTERVAL = 10
 
     while True:
         # Connection/reconnection loop
@@ -94,7 +103,7 @@ def start_socket_client():
                 print("Sent HELLO:STATION")
 
                 # Reset watchdog timers
-                last_ping_sent = time.ticks_ms() // 1000
+                last_ping_sent = time.time()
                 waiting_for_pong = False
 
             except OSError as e:
@@ -109,17 +118,13 @@ def start_socket_client():
                 time.sleep(RECONNECT_DELAY)
                 continue
 
-        # Main communication loop
+        # Main communication loop — all timing via plain time.time() integer reads.
         try:
-            # Watchdog: send PING
-            # Use ticks_ms()//1000 for monotonic seconds since boot.
-            # time.time() on this port returns microseconds (not seconds since epoch)
-            # and is therefore not suitable for interval comparisons.
-            current_time = time.ticks_ms() // 1000
-            if current_time - last_ping_sent >= PING_INTERVAL:
+            now = time.time()
+            if now - last_ping_sent >= PING_INTERVAL:
                 try:
                     s.write(b"PING\n")
-                    last_ping_sent = current_time
+                    last_ping_sent = now
                     waiting_for_pong = True
                     print("Sent PING")
                 except OSError as e:
@@ -127,7 +132,7 @@ def start_socket_client():
                     raise
 
             # Watchdog: check PONG timeout
-            if waiting_for_pong and (current_time - last_ping_sent > PONG_TIMEOUT):
+            if waiting_for_pong and now - last_ping_sent > PONG_TIMEOUT:
                 print(f"No PONG received within {PONG_TIMEOUT}s after PING - reconnecting")
                 try:
                     s.close()
@@ -137,38 +142,29 @@ def start_socket_client():
                 time.sleep(RECONNECT_DELAY)
                 continue
 
-            # Read line (non-blocking)
-            raw_line = b""
+            # Read line (non-blocking).
+            # raw_line = None means EAGAIN (no data yet) — don't touch the socket again.
+            # raw_line = b"" means readline() returned empty → peer closed the connection.
+            # raw_line = bytes  means a complete newline-terminated line was received.
+            raw_line = None
             try:
-                raw_line = s.readline()
+                data = s.readline()
+                raw_line = data  # b"" = closed, or actual line
             except OSError as e:
                 if e.args[0] != errno.EAGAIN:
                     raise
-                # No data available
+                # EAGAIN — no complete line buffered yet, raw_line stays None
 
-            # Check if connection was closed
+            # Check if connection was closed by peer
             if raw_line == b"":
+                print("Server closed connection - reconnecting")
                 try:
-                    test = s.recv(1)
-                    if test == b"":
-                        print("Server closed connection - reconnecting")
-                        try:
-                            s.close()
-                        except:
-                            pass
-                        s = None
-                        time.sleep(RECONNECT_DELAY)
-                        continue
-                except OSError as e:
-                    if e.args[0] != errno.EAGAIN:
-                        print("Connection lost - reconnecting")
-                        try:
-                            s.close()
-                        except:
-                            pass
-                        s = None
-                        time.sleep(RECONNECT_DELAY)
-                        continue
+                    s.close()
+                except:
+                    pass
+                s = None
+                time.sleep(RECONNECT_DELAY)
+                continue
 
             # Process received line
             if raw_line:
@@ -188,7 +184,8 @@ def start_socket_client():
                     elif len(parts) == 3:
                         station_name = parts[1]
                         state = parts[2]
-                        display_text(station_name, state)
+                        display_text(station_name, 0)
+                        # display_text(state, 1)
                     else:
                         print(f"Unknown STATION format: {line_str}")
 
@@ -213,10 +210,11 @@ def start_socket_client():
                 # Ignore unknown messages silently (could be ACK or other server messages)
 
             # Periodically display remaining ETA
-            if eta_unix is not None and current_time - last_eta_display >= ETA_DISPLAY_INTERVAL:
+            now = time.time()
+            if eta_unix is not None and now - last_eta_display >= ETA_DISPLAY_INTERVAL:
                 remaining = eta_unix - unix_time()
                 display_eta(remaining)
-                last_eta_display = current_time
+                last_eta_display = now
         except OSError as e:
             code = e.args[0]
             if code == errno.ECONNRESET:
@@ -255,7 +253,9 @@ def main():
                 print("WiFi connected")
                 # Sync RTC via NTP so unix_time() returns correct Unix timestamps
                 try:
+                    print(f"Before: {time.ticks_ms() // 1000} seconds since boot, RTC datetime={machine.RTC().datetime()}")
                     ntptime.settime()
+                    print(f"After: {time.ticks_ms() // 1000} seconds since boot, RTC datetime={machine.RTC().datetime()}") 
                     print(f"NTP sync done, unix_time={unix_time()}")
                 except Exception as e:
                     print(f"NTP sync failed: {e} (ETA countdown will be wrong)")
