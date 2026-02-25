@@ -97,6 +97,16 @@ class TrainStateMachine:
         if new_state and new_state != old_state:
             self._enter_state(new_state, from_state=old_state)
 
+    def force_driving_to_noname(self):
+        """Force transition to DRIVING_TO_NONAME.
+
+        Use when the real train passed Fasanenpark during an API outage so that
+        normal API events can no longer trigger the transition. The model will
+        drive back to noname and wait for the HALL sensor as usual.
+        """
+        if self.state != State.DRIVING_TO_NONAME:
+            self._enter_state(State.DRIVING_TO_NONAME, from_state=self.state)
+
     # ── Transition logic ────────────────────────────────────────────────
 
     def _transition_on_api(self, api_state: str, coordinates: list | None) -> State | None:

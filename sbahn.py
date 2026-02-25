@@ -20,6 +20,7 @@ Usage:
 import asyncio
 import json
 import sys
+import time
 import traceback
 from datetime import datetime
 import websockets
@@ -159,13 +160,14 @@ async def subscribe_bbox(ws):
 
 async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine, scheduled_ms: float):
     """
-    Feed live train data into the state machine until the real train departs Fasanenpark
-    (SM enters DRIVING_TO_NONAME). From that point the model runs autonomously back to
-    noname and waits for the next train — no more API input needed for this cycle.
+    Feed live train data into the state machine until SM reaches WAITING_AT_NONAME.
+    This covers the full cycle:
+      - watching for the train to board/drive along the route
+      - after Fasanenpark the model drives back to noname autonomously
+      - we keep draining the WebSocket (required to prevent backpressure) until
+        the HALL sensor fires and SM enters WAITING_AT_NONAME
     """
     print(f"👁️  Watching for train {train_number}...\n")
-
-    last_real_state = None  # Track the real train's last reported state
 
     async for message in ws:
         try:
@@ -179,15 +181,11 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
                     if not item:
                         continue
                     trajectory = item.get("content")
-                    new_real = _process_train_update(trajectory, train_number, sm, last_real_state, scheduled_ms)
-                    if new_real is not None:
-                        last_real_state = new_real
+                    _process_train_update(trajectory, train_number, sm, scheduled_ms)
 
             elif source.startswith("trajectory"):
                 # Individual trajectory update
-                new_real = _process_train_update(content, train_number, sm, last_real_state, scheduled_ms)
-                if new_real is not None:
-                    last_real_state = new_real
+                _process_train_update(content, train_number, sm, scheduled_ms)
 
         except json.JSONDecodeError:
             pass
@@ -195,27 +193,23 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
             print(f"❌ Error processing update: {e}")
             traceback.print_exc()
 
-        # Once the real train departs Fasanenpark the SM drives back to noname on its own.
-        # No more API updates are needed for this train — return so the caller can pick the next one.
-        if sm.state == State.DRIVING_TO_NONAME:
-            print("\n🏁 Train passed Fasanenpark. Model returning to noname autonomously...\n")
+        if sm.state == State.WAITING_AT_NONAME:
             return
 
 
 def _process_train_update(
-    data: dict, train_number: int, sm: TrainStateMachine, last_reported_state: str | None,
+    data: dict, train_number: int, sm: TrainStateMachine,
     scheduled_ms: float
-) -> str | None:
+) -> None:
     """
     Process a single train update. Feed state changes to the state machine.
-    Returns the new real state if it changed, else None.
     """
     if not isinstance(data, dict):
-        return None
+        return
 
     props = data.get("properties", {})
     if props.get("train_number") != train_number:
-        return None
+        return
 
     new_state = props.get("state")
     raw_coords = props.get("raw_coordinates")
@@ -225,8 +219,8 @@ def _process_train_update(
     if raw_coords and len(raw_coords) >= 2:
         coordinates = [raw_coords[0], raw_coords[1]]  # [lon, lat]
 
-    # Only feed state machine on actual state CHANGES
-    if new_state and new_state != last_reported_state:
+    # Only feed state machine on actual state CHANGES (sm.last_api_state tracks current)
+    if new_state and new_state != sm.last_api_state:
         now = datetime.now().strftime("%H:%M:%S")
         delay = props.get("delay") or 0
         delay_str = f" (delay: {delay/1000:.0f}s)" if delay else " (on time)"
@@ -238,9 +232,6 @@ def _process_train_update(
         print(f"\n[{now}] {icon} Real train: {new_state}{delay_str}{pos_str}")
 
         sm.on_api_state_change(new_state, coordinates, arrival_unix)
-        return new_state
-
-    return None
 
 
 # ── Stdin listener for simulated HALL events ────────────────────────────
@@ -317,16 +308,33 @@ async def main():
                                 return
 
                         while True:  # main train loop
-                            # Ensure the model is at noname before picking a new train.
-                            # This guards against reconnects while the model is still
-                            # driving back to noname from the previous cycle.
-                            if sm.state != State.WAITING_AT_NONAME:
-                                print(f"⏳ SM in {sm.state.name}, waiting for model to reach noname before picking next train...")
-                                while sm.state != State.WAITING_AT_NONAME:
-                                    try:
-                                        await asyncio.wait_for(ws.recv(), timeout=0.5)
-                                    except asyncio.TimeoutError:
-                                        pass
+                            # On reconnect the SM may be mid-cycle.
+                            #
+                            # DRIVING_TO_NONAME: real train is gone, HALL sensor hasn't fired yet.
+                            # The SM ignores all API events in this state, so there is nothing to
+                            # track — just drain the WebSocket to avoid backpressure until HALL fires.
+                            #
+                            # Any other non-WAITING state: the same in-progress train is still in
+                            # the timetable (last_scheduled_ms wasn't updated yet), so pick_target_train
+                            # will re-select it naturally — no special handling needed.
+
+                            # If the train departed long enough ago to have passed Fasanenpark but
+                            # the SM wasn't updated before the outage, force it forward now.
+                            _ROUTE_MS = (1440 + 300) * 1000  # 1440 s route + 5 min tolerance
+                            if (sm.state not in (State.WAITING_AT_NONAME, State.DRIVING_TO_NONAME)
+                                    and last_scheduled_ms > 0
+                                    and time.time() * 1000 > last_scheduled_ms + _ROUTE_MS):
+                                elapsed_min = (time.time() * 1000 - last_scheduled_ms) / 60000
+                                print(f"🚨 Train departed {elapsed_min:.0f} min ago "
+                                      f"— already past Fasanenpark. Forcing {sm.state.name} → DRIVING_TO_NONAME")
+                                sm.force_driving_to_noname()
+
+                            if sm.state == State.DRIVING_TO_NONAME:
+                                print("⏳ Model returning to noname — draining WebSocket until HALL fires...")
+                                async for message in ws:
+                                    if sm.state == State.WAITING_AT_NONAME:
+                                        break
+                                continue  # proceed to pick next train normally
 
                             trains = await get_incoming_trains(ws, uic)
                             if not trains:
@@ -361,8 +369,6 @@ async def main():
 
                             await track_with_state_machine(ws, train_number, sm, scheduled_ms)
                             last_scheduled_ms = scheduled_ms
-                            # Loop back to top — the wait-for-WAITING_AT_NONAME check
-                            # at the top of this loop will block until the HALL sensor fires.
 
                     finally:
                         keepalive_task.cancel()
@@ -373,7 +379,6 @@ async def main():
 
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"\n🔌 WebSocket connection closed ({e}). Reconnecting in 5s...")
-                last_scheduled_ms = 0  # allow re-picking after reconnect
                 await asyncio.sleep(5)
             except OSError as e:
                 print(f"\n🔌 Network error ({e}). Reconnecting in 10s...")
