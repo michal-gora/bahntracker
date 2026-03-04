@@ -39,7 +39,7 @@ class TrainStateMachine:
     def __init__(self, model_output, station_output, stations: list):
         """
         Args:
-            model_output:   Object with send_speed(float) and send_stop() methods
+            model_output:   Object with send_speed(float), send_stop(), send_loops(int) methods
             station_output: Object with send_station(name, valid) and send_clear() methods
             stations:       List of station dicts from travel_times.json
         """
@@ -183,13 +183,6 @@ class TrainStateMachine:
                 print(f"[{now}] ⚠️  No GPS on first boarding, defaulting to first station: {self.stations[0]['name']}")
             # else: no GPS but not first boarding — trust existing counter
 
-        elif new_state == State.RUNNING_TO_STATION:
-            # Real train is boarding at the station the model is running toward.
-            # current_station_index already points there (was incremented on DRIVING entry).
-            # Re-sync from GPS in case we drifted — same logic as AT_STATION_VALID.
-            if coordinates:
-                self._gps_sync_station(coordinates, now)
-
         elif new_state == State.DRIVING:
             # Departing: increment index to point to our destination (next station)
             if self.current_station_index is not None:
@@ -199,10 +192,23 @@ class TrainStateMachine:
                     print(f"[{now}] ⚠️  Station index overflow, clamped to last station")
             # Calculate speed from travel time
             self.travel_speed = self._calculate_speed()
+            # TODO: derive loop count from travel_times.json or station config
+            self.model.send_loops(3)
 
         elif new_state == State.DRIVING_TO_NONAME:
             # Fixed speed for return to noname
             self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
+            # TODO: derive loop count from config
+            self.model.send_loops(3)
+
+        elif new_state == State.RUNNING_TO_STATION:
+            # Real train is boarding at the station the model is running toward.
+            # current_station_index already points there (was incremented on DRIVING entry).
+            # Re-sync from GPS in case we drifted — same logic as AT_STATION_VALID.
+            if coordinates:
+                self._gps_sync_station(coordinates, now)
+            # TODO: derive loop count from config
+            self.model.send_loops(0)
 
         elif new_state == State.WAITING_AT_NONAME:
             self.current_station_index = None

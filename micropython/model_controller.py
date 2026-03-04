@@ -34,13 +34,16 @@ HALL_PIN = "P9_0"
 # Noise spikes go HIGH before the main loop check and are cancelled by the
 # rising-edge IRQ.
 HALL_MIN_LOW_MS = 5    # ms – pin must stay LOW this long to confirm a trigger
-HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts
+HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts / after each pass-through
 # ============================================================
 
 # Global state
 hall_triggered: bool = False  # set by rising-edge IRQ when LOW duration is long enough
 hall_measuring: bool = False  # True after a falling edge, reset after rising edge
 hall_fall_time: int = 0       # time.ticks_ms() recorded at falling edge
+hall_loop_config: int = 0             # persistent setting, written by LOOPS:N command
+                                      # 0 = stop on first pass, N>0 = N extra loops, <0 = ignore hall
+hall_loops_remaining: int = 0         # runtime countdown, reset to hall_loop_config on each start
 train_started_at: float = 0.0    # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
 
@@ -68,7 +71,7 @@ def set_speed(speed : float):
     Args:
         speed: [0, 1], sets the PWM between 0% and 100%
     """
-    global pwm, train_started_at, current_speed
+    global pwm, train_started_at, current_speed, hall_loops_remaining, hall_loop_config
     
     # Clipping speed to [0, 1]
     speed = max(0., min(speed, 1.))
@@ -76,7 +79,8 @@ def set_speed(speed : float):
     # Track when train starts moving (transition from 0 to >0)
     if current_speed == 0.0 and speed > 0.0:
         train_started_at = time.time()
-        print(f"Train started at {train_started_at}")
+        hall_loops_remaining = hall_loop_config
+        print(f"Train started at {train_started_at}, loops set to {hall_loops_remaining}")
     
     current_speed = speed
     pwm.duty_u16(int(speed * 65535.0))
@@ -113,7 +117,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config
     
     s = None
     last_ping_sent: float = 0.0
@@ -168,15 +172,24 @@ def start_socket_client():
                 time_since_start = current_time - train_started_at
 
                 if time_since_start < HALL_STARTUP_DELAY:
-                    print(f"Ignoring hall trigger during startup (t={time_since_start:.1f}s)")
-                else:
+                    print(f"Ignoring hall trigger during startup/cooldown (t={time_since_start:.1f}s)")
+                elif hall_loops_remaining < 0:
+                    # Infinite mode – ignore hall sensor
+                    pass
+                elif hall_loops_remaining == 0:
+                    # Stop the train (hall_loops_remaining resets via set_speed() on next start)
                     try:
                         s.write(b"HALL\n")
-                        set_speed(0.0)  # Stop train on hall trigger
-                        print(f"Sent HALL")
+                        set_speed(0.0)
+                        print("Sent HALL – train stopped")
                     except OSError as e:
                         print(f"Failed to send HALL: {e}")
                         raise
+                else:
+                    # More loops to go – apply cooldown and decrement
+                    hall_loops_remaining -= 1
+                    train_started_at = time.time()
+                    print(f"Pass-through, cooldown reset, {hall_loops_remaining} loop(s) remaining")
             
             # Watchdog: Check if we need to send PING
             current_time = time.time()
@@ -270,6 +283,14 @@ def start_socket_client():
                     reverser_state = bool(int(line_str.split(":")[1]))
                     print("Reverser state:", reverser_state)
                     set_reverser(reverser_state)
+                elif line_str.startswith("LOOPS:"):
+                    try:
+                        loops = int(line_str.split(":")[1])
+                        hall_loop_config = loops  # negative=infinite, 0=stop immediately, N=extra loops
+                        hall_loops_remaining = hall_loop_config
+                        print(f"Hall loop count set to {hall_loop_config}")
+                    except (IndexError, ValueError):
+                        print("Invalid LOOPS format")
                 # Ignore unknown messages silently (could be ACK or other server messages)
 
         except OSError as e:

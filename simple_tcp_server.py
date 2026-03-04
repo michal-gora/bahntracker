@@ -119,6 +119,10 @@ def input_thread():
                 else:
                     print("⚠️  No client connected")
             elif cmd:
+                if client_writer:
+                    client_writer.write(cmd)
+                    asyncio.run_coroutine_threadsafe(client_writer.drain(), loop)
+                    print(f"📤 Sent: {msg.decode().strip()}")
                 print(f"Unknown command: {cmd}")
         except EOFError:
             break

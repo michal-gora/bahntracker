@@ -5,7 +5,7 @@ Architecture: Server runs a plain TCP server. The model controller (MicroPython
 on Psoc 6) connects as a TCP client. Messages are newline-terminated text.
 
 Protocol:
-    Server → Model:  SPEED:x\n (x-> float [0,1])  |   REVERSER:x\n (x-> 1 = forward, 0 = reverse)
+    Server → Model:  SPEED:x\n (x-> float [0,1])  |   REVERSER:x\n (x-> 1 = forward, 0 = reverse)  |   LOOPS:N\n (N=0 stop immediately, N>0 extra loops, N<0 ignore hall)
     Model → Server:  HELLO:MODEL\n  |   HALL\n  |   PING\n
     Server → Model:  ACK\n  (after HELLO)  |   PONG\n  (after PING)
 """
@@ -58,6 +58,9 @@ class TcpModelOutput(ModelOutput):
 
     def send_stop(self):
         self._do_send("SPEED:0.0\n")
+
+    def send_loops(self, count: int):
+        self._do_send(f"LOOPS:{count}\n")
 
 
 async def tcp_model_server(model_output: TcpModelOutput, state_machine):

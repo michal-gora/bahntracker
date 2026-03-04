@@ -23,6 +23,15 @@ class ModelOutput(ABC):
         """Send STOP command."""
         ...
 
+    @abstractmethod
+    def send_loops(self, count: int):
+        """Send LOOPS:N command.
+        N=0: stop on first hall pass.
+        N>0: pass through N extra times before stopping.
+        N<0: ignore hall sensor (run indefinitely).
+        """
+        ...
+
 
 class PrintModelOutput(ModelOutput):
     """Print-stub: logs commands to console."""
@@ -31,6 +40,9 @@ class PrintModelOutput(ModelOutput):
         pass  # State machine already prints; avoid double-logging
 
     def send_stop(self):
+        pass  # State machine already prints
+
+    def send_loops(self, count: int):
         pass  # State machine already prints
 
 
