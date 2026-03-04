@@ -104,7 +104,7 @@ def input_thread():
     
     while True:
         try:
-            cmd = input().strip().lower()
+            cmd = input().strip()
             
             if cmd == 'q':
                 print("Quitting...")
