@@ -47,6 +47,7 @@ hall_loops_remaining: int = 0         # runtime countdown, reset to hall_loop_co
 train_started_at: float = 0.0    # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
 final_speed: float = 0.0
+RAMP_DISTANCE = 2.0  # tunable — larger = gentler ramp
 
 is_led_on = True
 led_pin = LED_PIN
@@ -118,7 +119,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed, RAMP_DISTANCE
     
     s = None
     last_ping_sent: float = 0.0
@@ -193,11 +194,17 @@ def start_socket_client():
                     print(f"Pass-through, cooldown reset, {hall_loops_remaining} loop(s) remaining")
             
             # Acceleration and Speed Control Logic:
+            MIN_STEP = 0.001  # guarantees eventual arrival
+
             speed_diff = final_speed - current_speed
             if speed_diff != 0.0:
-                step = 0.5 * 0.01  # max_accel (0.5/s) * dt (10 ms)
+                a = (final_speed**2 - current_speed**2) / (2 * RAMP_DISTANCE)
+                step = max(MIN_STEP, abs(a) * 0.01)
                 current_speed += max(-step, min(step, speed_diff))
-                pwm.duty_u16(int(current_speed * 65535.0))
+                if current_speed < 0.2:
+                    pwm.duty_u16(0)
+                else:
+                    pwm.duty_u16(int(current_speed * 65535.0))
             
             
             # Watchdog: Check if we need to send PING
@@ -299,6 +306,14 @@ def start_socket_client():
                         print(f"Hall loop count set to {hall_loop_config}")
                     except (IndexError, ValueError):
                         print("Invalid LOOPS format")
+                elif line_str.startswith("RAMP_DISTANCE:"):
+                    try:
+                        RAMP_DISTANCE = float(line_str.split(":")[1])
+                        print(f"Ramp distance set to {RAMP_DISTANCE}")
+                    except (IndexError, ValueError):
+                        print("Invalid RAMP_DISTANCE format")
+                else:
+                    print(f"Unknown command: {line_str}")
                 # Ignore unknown messages silently (could be ACK or other server messages)
 
         except OSError as e:
