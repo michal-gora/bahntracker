@@ -287,7 +287,6 @@ def start_socket_client():
                     try:
                         loops = int(line_str.split(":")[1])
                         hall_loop_config = loops  # negative=infinite, 0=stop immediately, N=extra loops
-                        hall_loops_remaining = hall_loop_config
                         print(f"Hall loop count set to {hall_loop_config}")
                     except (IndexError, ValueError):
                         print("Invalid LOOPS format")

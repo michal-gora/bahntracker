@@ -199,7 +199,7 @@ class TrainStateMachine:
             # Fixed speed for return to noname
             self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
             # TODO: derive loop count from config
-            self.model.send_loops(3)
+            self.model.send_loops(0)
 
         elif new_state == State.RUNNING_TO_STATION:
             # Real train is boarding at the station the model is running toward.
