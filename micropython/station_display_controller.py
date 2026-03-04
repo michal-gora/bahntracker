@@ -58,8 +58,10 @@ def display_text(line: str, arg : int = 0):
         arg: Which element to update (0 = top row, 1 = bottom row, 2 = status indicator bottom right)
     """
     display_clear(arg)
-    if arg in (0, 1):
-        LCD.puts(f"{line.strip()[:16]}", y=arg)
+    if arg == 0:
+        LCD.puts(f"{line.strip()[:16]}", y=0)
+    elif arg == 1:
+        LCD.puts(f"{line.strip()[:15]}", y=1)
     elif arg == 2:
         LCD.puts(line.strip()[:1], x=15, y=1)
     print(f"Display: [{line}] with arg={arg}")
@@ -68,7 +70,9 @@ def display_eta(remaining_seconds: int):
     """Show remaining time until train arrives at Fasanenpark."""
     mins = remaining_seconds // 60
     secs = remaining_seconds % 60
-    display_text(f"ETA: {mins}m {secs:02d}s", 1)
+    if mins > 99:
+        display_text("ETA: >99m", 1)
+    display_text(f"ETA: {str(mins)[:3]}m {secs:02d}s", 1)
     print(f"ETA display: {mins}m {secs:02d}s remaining")
 
 
