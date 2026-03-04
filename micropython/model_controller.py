@@ -117,7 +117,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at
     
     s = None
     last_ping_sent: float = 0.0
