@@ -46,6 +46,7 @@ hall_loop_config: int = 0             # persistent setting, written by LOOPS:N c
 hall_loops_remaining: int = 0         # runtime countdown, reset to hall_loop_config on each start
 train_started_at: float = 0.0    # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
+final_speed: float = 0.0
 
 is_led_on = True
 led_pin = LED_PIN
@@ -71,7 +72,7 @@ def set_speed(speed : float):
     Args:
         speed: [0, 1], sets the PWM between 0% and 100%
     """
-    global pwm, train_started_at, current_speed, hall_loops_remaining, hall_loop_config
+    global pwm, train_started_at, current_speed, final_speed, hall_loops_remaining, hall_loop_config
     
     # Clipping speed to [0, 1]
     speed = max(0., min(speed, 1.))
@@ -82,8 +83,8 @@ def set_speed(speed : float):
         hall_loops_remaining = hall_loop_config
         print(f"Train started at {train_started_at}, loops set to {hall_loops_remaining}")
     
-    current_speed = speed
-    pwm.duty_u16(int(speed * 65535.0))
+    final_speed = speed
+    # pwm.duty_u16(int(speed * 65535.0)) # Immediately apply new speed
     print(f"Set pwm duty cycle to {speed}")
     return
     
@@ -117,7 +118,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed
     
     s = None
     last_ping_sent: float = 0.0
@@ -190,6 +191,14 @@ def start_socket_client():
                     hall_loops_remaining -= 1
                     train_started_at = time.time()
                     print(f"Pass-through, cooldown reset, {hall_loops_remaining} loop(s) remaining")
+            
+            # Acceleration and Speed Control Logic:
+            speed_diff = final_speed - current_speed
+            if speed_diff != 0.0:
+                step = 0.5 * 0.01  # max_accel (0.5/s) * dt (10 ms)
+                current_speed += max(-step, min(step, speed_diff))
+                pwm.duty_u16(int(current_speed * 65535.0))
+            
             
             # Watchdog: Check if we need to send PING
             current_time = time.time()
