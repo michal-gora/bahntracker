@@ -88,6 +88,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         print("\n🔌 Connection closed")
 
 
+async def _send(writer: asyncio.StreamWriter, data: bytes):
+    """Send data safely from within the event loop (called via run_coroutine_threadsafe)."""
+    writer.write(data)
+    await writer.drain()
+
+
 def input_thread():
     """Thread to read stdin and send commands"""
     commands = {
@@ -110,20 +116,11 @@ def input_thread():
                 print("Quitting...")
                 sys.exit(0)
             
-            if cmd in commands:
+            msg = commands.get(cmd) or (cmd + "\n").encode() if cmd else None
+            if msg:
                 if client_writer:
-                    msg = commands[cmd]
-                    client_writer.write(msg)
-                    asyncio.run_coroutine_threadsafe(client_writer.drain(), loop)
+                    asyncio.run_coroutine_threadsafe(_send(client_writer, msg), loop)
                     print(f"📤 Sent: {msg.decode().strip()}")
-                else:
-                    print("⚠️  No client connected")
-            elif cmd:
-                if client_writer:
-                    msg = (cmd + "\n").encode()
-                    client_writer.write(msg)
-                    asyncio.run_coroutine_threadsafe(client_writer.drain(), loop)
-                    print(f"📤 Sent: {cmd}")
                 else:
                     print("⚠️  No client connected")
         except EOFError:
