@@ -412,6 +412,13 @@
                 ws.send("BUFFER 100 100");
                 ws.send("BBOX " + BBOX);
                 // REMOVED: ws.send("GET station"); <-- We don't ask for stations anymore!
+
+                // Send PING every 10 seconds to keep connection alive
+                setInterval(function () {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send("PING");
+                    }
+                }, 10000);
             };
 
             ws.onmessage = function (event) {
@@ -481,7 +488,10 @@
                                     state: state, heading: heading,
                                     ts: Date.now() / 1000
                                 };
+                                console.log("updating" + id);
                                 updateMarker(id);
+                            }else{
+                                console.log("not updating " + id);
                             }
                         }
                     });
@@ -503,7 +513,7 @@
                 Object.keys(trainData).forEach(id => {
                     var t = trainData[id];
                     var marker = markers[id];
-                    if (now - t.ts > 60) {
+                    if (now - t.ts > 30) {
                         trainLayer.removeLayer(marker); delete markers[id]; delete trainData[id]; return;
                     }
                     var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
