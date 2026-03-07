@@ -430,23 +430,37 @@
             ws.onmessage = function (event) {
                 try {
                     var msg = JSON.parse(event.data);
-                    var items = [];
                     var source = msg.source;
 
+                    // 1. INTERCEPT STOP SEQUENCE RESPONSES
+                    if (source && source.startsWith('stopsequence_')) {
+                        if (msg.content && msg.content.length > 0) {
+                            var seqData = msg.content[0];
+                            var trainId = seqData.id;
+                            var realDestination = seqData.destination;
+
+                            // Update the train's destination and redraw the marker
+                            if (trainData[trainId]) {
+                                trainData[trainId].destination = realDestination;
+                                updateMarker(trainId);
+                                // console.log("Fetched destination for " + trainId + ": " + realDestination);
+                            }
+                        }
+                        return; // We are done with this message, stop here.
+                    }
+
+                    var items = [];
                     // Helper to normalize data structure
                     if (source === 'list') items = msg.content;
-                    else if (source === 'trajectory') items = [msg]; // We only care about trajectories now
+                    else if (source === 'trajectory') items = [msg];
                     else if (source === 'buffer') items = msg.content;
 
                     if (!items) return;
 
                     items.forEach(item => {
-                        if (typeof item === 'string') return;
-                        if (item === null) return;
+                        if (typeof item === 'string' || item === null) return;
                         var content = item.content || item;
                         var type = item.source || source;
-
-                        // REMOVED: Station parsing logic (since we use static data now)
 
                         // --- TRAIN LOGIC ONLY ---
                         if (type === 'trajectory') {
@@ -459,16 +473,16 @@
                             var state = props.state || 'DRIVING';
                             var coordsPoly = geom.coordinates || [];
                             var intervals = props.time_intervals || [];
-                            var route_id = props.route_identifier;
-                            var destination = "";
-                            if (route_id !== null){
-                                var destination_parts = route_id.split("-")
-                                if (destination_parts.length === 4) {
-                                    let destUic = destination_parts[2];
-                                    console.log(route_id)
-                                    destination = stationMap[destUic] || "Unknown Station";
-                                }
+
+                            // 2. REQUEST DESTINATION IF NEW TRAIN
+                            var isNewTrain = !trainData[id];
+                            if (isNewTrain && ws.readyState === WebSocket.OPEN) {
+                                ws.send('GET stopsequence_' + id);
                             }
+
+                            // 3. PRESERVE THE FETCHED DESTINATION
+                            // If we already fetched it, keep it. Otherwise, say "Loading..."
+                            var currentDest = trainData[id] ? trainData[id].destination : "Loading...";
 
                             var lat = 0, lon = 0, nextLat = null, nextLon = null;
                             var startTs = 0, nextTs = null;
@@ -496,24 +510,29 @@
                             } else startTs = (props.timestamp || Date.now()) / 1000.0;
 
                             if (lat !== 0) {
+                                // Update the train data object, but keep the `currentDest`
                                 trainData[id] = {
-                                    id: lineName, lat: lat, lon: lon,
-                                    next_lat: nextLat, next_lon: nextLon,
-                                    start_ts: startTs, next_ts: nextTs,
-                                    color: color, text_color: textColor,
-                                    state: state, heading: heading,
-                                    destination: route_id,
+                                    id: lineName,
+                                    lat: lat,
+                                    lon: lon,
+                                    next_lat: nextLat,
+                                    next_lon: nextLon,
+                                    start_ts: startTs,
+                                    next_ts: nextTs,
+                                    color: color,
+                                    text_color: textColor,
+                                    state: state,
+                                    heading: heading,
+                                    destination: currentDest, // <--- Preserved here
                                     ts: Date.now() / 1000
                                 };
-                                console.log("updating" + id);
                                 updateMarker(id);
-                            } else {
-                                console.log("not updating " + id);
                             }
                         }
                     });
                 } catch (e) { console.error("Parse Error:", e); }
             };
+
 
             function updateMarker(id) {
                 var t = trainData[id];
@@ -521,7 +540,7 @@
                 var arrowStyle = (t.heading !== null) ? `transform: rotate(${t.heading}deg); color: ${t.color};` : 'display: none;';
                 var html = `<div class="icon-container"><div class="train-circle ${isBoarding ? 'boarding' : 'driving'}" style="background-color: ${t.color}; color: ${t.text_color};">${t.id}</div><div class="arrow-pointer" style="${arrowStyle}"></div></div>`;
                 var icon = L.divIcon({ className: 'custom-train-icon', html: html, iconSize: [30, 30], iconAnchor: [15, 15] });
-                var popupContent = `<b>${t.id}</b><br/>State: ${t.state}<br/>FROM: ${t.destination}`;
+                var popupContent = `<b>${t.id} - ${t.destination}</b><br/>State: ${t.state}`;
 
                 if (!markers[id]) {
                     markers[id] = L.marker([t.lat, t.lon], { icon: icon }).addTo(trainLayer);
