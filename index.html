@@ -417,7 +417,10 @@
                 console.log("WS Connected");
                 ws.send("BUFFER 100 100");
                 ws.send("BBOX " + BBOX);
-                // REMOVED: ws.send("GET station"); <-- We don't ask for stations anymore!
+
+                // Request initial list of deleted vehicles, and subscribe to future ones
+                ws.send("GET deleted_vehicles");
+                ws.send("SUB deleted_vehicles");
 
                 // Send PING every 10 seconds to keep connection alive
                 setInterval(function () {
@@ -426,6 +429,7 @@
                     }
                 }, 10000);
             };
+
 
             ws.onmessage = function (event) {
                 try {
@@ -439,18 +443,29 @@
                             var trainId = seqData.id;
                             var realDestination = seqData.destination;
 
-                            // Update the train's destination and redraw the marker
                             if (trainData[trainId]) {
                                 trainData[trainId].destination = realDestination;
                                 updateMarker(trainId);
-                                // console.log("Fetched destination for " + trainId + ": " + realDestination);
                             }
                         }
-                        return; // We are done with this message, stop here.
+                        return;
+                    }
+
+                    // 2. INTERCEPT ROOT-LEVEL DELETED VEHICLES (If sent outside a buffer)
+                    if (source === 'deleted_vehicles') {
+                        // It could be a single string or an array of strings
+                        var deletedIds = Array.isArray(msg.content) ? msg.content : [msg.content];
+                        deletedIds.forEach(id => {
+                            if (markers[id]) {
+                                trainLayer.removeLayer(markers[id]); // Remove from map immediately
+                                delete markers[id];
+                            }
+                            delete trainData[id];
+                        });
+                        return;
                     }
 
                     var items = [];
-                    // Helper to normalize data structure
                     if (source === 'list') items = msg.content;
                     else if (source === 'trajectory') items = [msg];
                     else if (source === 'buffer') items = msg.content;
@@ -462,7 +477,20 @@
                         var content = item.content || item;
                         var type = item.source || source;
 
-                        // --- TRAIN LOGIC ONLY ---
+                        // --- 3. DELETED VEHICLES (If nestled inside a buffer array) ---
+                        if (type === 'deleted_vehicles') {
+                            var idToDelete = typeof content === 'string' ? content : item.content;
+                            if (idToDelete) {
+                                if (markers[idToDelete]) {
+                                    trainLayer.removeLayer(markers[idToDelete]);
+                                    delete markers[idToDelete];
+                                }
+                                delete trainData[idToDelete];
+                            }
+                            return; // Stop processing this specific item
+                        }
+
+                        // --- 4. TRAIN LOGIC ONLY ---
                         if (type === 'trajectory') {
                             var props = content.properties || {};
                             var geom = content.geometry || {};
@@ -474,14 +502,11 @@
                             var coordsPoly = geom.coordinates || [];
                             var intervals = props.time_intervals || [];
 
-                            // 2. REQUEST DESTINATION IF NEW TRAIN
                             var isNewTrain = !trainData[id];
                             if (isNewTrain && ws.readyState === WebSocket.OPEN) {
                                 ws.send('GET stopsequence_' + id);
                             }
 
-                            // 3. PRESERVE THE FETCHED DESTINATION
-                            // If we already fetched it, keep it. Otherwise, say "Loading..."
                             var currentDest = trainData[id] ? trainData[id].destination : "Loading...";
 
                             var lat = 0, lon = 0, nextLat = null, nextLon = null;
@@ -510,7 +535,6 @@
                             } else startTs = (props.timestamp || Date.now()) / 1000.0;
 
                             if (lat !== 0) {
-                                // Update the train data object, but keep the `currentDest`
                                 trainData[id] = {
                                     id: lineName,
                                     lat: lat,
@@ -523,7 +547,7 @@
                                     text_color: textColor,
                                     state: state,
                                     heading: heading,
-                                    destination: currentDest, // <--- Preserved here
+                                    destination: currentDest,
                                     ts: Date.now() / 1000
                                 };
                                 updateMarker(id);
@@ -532,6 +556,7 @@
                     });
                 } catch (e) { console.error("Parse Error:", e); }
             };
+
 
 
             function updateMarker(id) {
@@ -557,9 +582,9 @@
                 Object.keys(trainData).forEach(id => {
                     var t = trainData[id];
                     var marker = markers[id];
-                    if (now - t.ts > 60) {
-                        trainLayer.removeLayer(marker); delete markers[id]; delete trainData[id]; return;
-                    }
+                    // if (now - t.ts > 60) {
+                    //     trainLayer.removeLayer(marker); delete markers[id]; delete trainData[id]; return;
+                    // }
                     var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
                     if (false && !isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {
                         var total = t.next_ts - t.start_ts;
