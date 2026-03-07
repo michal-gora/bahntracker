@@ -10,7 +10,7 @@ counter = 0
 def on_message(ws, msg):
     global counter
     data = json.loads(msg)
-    print(json.dumps(data, indent=4)[:500])
+    print(json.dumps(data, indent=4))
     if counter > 1000:
         sys.exit()
     else:
@@ -35,8 +35,9 @@ def on_open(ws):
     # ws.send("BBOX 837468 5963148 915383 6033720 11")
     
     # Munich wide
-    ws.send("BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm")
+    # ws.send("BBOX 1269000 6087000 1350000 6200000 5 tenant=sbm")
     # ws.send("GET station")
+    ws.send("GET stopsequence_sbm_140511618865616")
     # Ping loop
     def ping():
         while ws.sock and ws.sock.connected:

@@ -313,6 +313,12 @@
                 { "uic": "8006582", "name": "Würzburg Süd", "lat": 49.78819, "lon": 9.94351 },
                 { "uic": "8006671", "name": "Zorneding", "lat": 48.0896, "lon": 11.83246 },
             ];
+
+            // 1. Create the lookup map once
+            const stationMap = {};
+            STATIONS_DATA.forEach(s => {
+                stationMap[s.uic] = s.name;
+            });
             // ============================================================
 
             // --- CONFIG ---
@@ -453,6 +459,16 @@
                             var state = props.state || 'DRIVING';
                             var coordsPoly = geom.coordinates || [];
                             var intervals = props.time_intervals || [];
+                            var route_id = props.route_identifier;
+                            var destination = "";
+                            if (route_id !== null){
+                                var destination_parts = route_id.split("-")
+                                if (destination_parts.length === 4) {
+                                    let destUic = destination_parts[2];
+                                    console.log(route_id)
+                                    destination = stationMap[destUic] || "Unknown Station";
+                                }
+                            }
 
                             var lat = 0, lon = 0, nextLat = null, nextLon = null;
                             var startTs = 0, nextTs = null;
@@ -486,11 +502,12 @@
                                     start_ts: startTs, next_ts: nextTs,
                                     color: color, text_color: textColor,
                                     state: state, heading: heading,
+                                    destination: route_id,
                                     ts: Date.now() / 1000
                                 };
                                 console.log("updating" + id);
                                 updateMarker(id);
-                            }else{
+                            } else {
                                 console.log("not updating " + id);
                             }
                         }
@@ -504,8 +521,16 @@
                 var arrowStyle = (t.heading !== null) ? `transform: rotate(${t.heading}deg); color: ${t.color};` : 'display: none;';
                 var html = `<div class="icon-container"><div class="train-circle ${isBoarding ? 'boarding' : 'driving'}" style="background-color: ${t.color}; color: ${t.text_color};">${t.id}</div><div class="arrow-pointer" style="${arrowStyle}"></div></div>`;
                 var icon = L.divIcon({ className: 'custom-train-icon', html: html, iconSize: [30, 30], iconAnchor: [15, 15] });
-                if (!markers[id]) markers[id] = L.marker([t.lat, t.lon], { icon: icon }).addTo(trainLayer);
-                else markers[id].setIcon(icon);
+                var popupContent = `<b>${t.id}</b><br/>State: ${t.state}<br/>FROM: ${t.destination}`;
+
+                if (!markers[id]) {
+                    markers[id] = L.marker([t.lat, t.lon], { icon: icon }).addTo(trainLayer);
+                    markers[id].bindPopup(popupContent);
+                } else {
+                    markers[id].setLatLng([t.lat, t.lon]);
+                    markers[id].setIcon(icon);
+                    markers[id].setPopupContent(popupContent);
+                }
             }
 
             function animate() {
