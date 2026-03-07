@@ -436,7 +436,7 @@
 
                     items.forEach(item => {
                         if (typeof item === 'string') return;
-
+                        if (item === null) return;
                         var content = item.content || item;
                         var type = item.source || source;
 
@@ -513,11 +513,11 @@
                 Object.keys(trainData).forEach(id => {
                     var t = trainData[id];
                     var marker = markers[id];
-                    if (now - t.ts > 30) {
+                    if (now - t.ts > 60) {
                         trainLayer.removeLayer(marker); delete markers[id]; delete trainData[id]; return;
                     }
                     var isBoarding = (t.state === 'BOARDING' || t.state === 'STOPPING');
-                    if (!isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {
+                    if (false && !isBoarding && t.next_lat && t.next_lon && t.next_ts && t.start_ts) {
                         var total = t.next_ts - t.start_ts;
                         var elapsed = now - t.start_ts;
                         if (total > 0) {
