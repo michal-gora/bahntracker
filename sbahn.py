@@ -201,7 +201,12 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
         if sm.state != State.WAITING_AT_NONAME:
             departed = True
         elif departed:
-            return
+            return True  # full cycle complete
+
+    # WebSocket closed before the train completed its cycle.
+    # Return whether the train had at least departed — caller uses this to decide
+    # whether to advance last_scheduled_ms.
+    return departed
 
 
 def _process_train_update(
@@ -374,8 +379,14 @@ async def main():
                             sm.eta_to_fasanenpark = int(estimated_ms / 1000)
                             sm.station.send_eta(sm.eta_to_fasanenpark)
 
-                            await track_with_state_machine(ws, train_number, sm, scheduled_ms)
-                            last_scheduled_ms = scheduled_ms
+                            train_departed = await track_with_state_machine(ws, train_number, sm, scheduled_ms)
+                            if train_departed:
+                                # Normal completion (returned None via implicit return) or departed=True:
+                                # the train ran its full cycle, advance the cursor.
+                                last_scheduled_ms = scheduled_ms
+                            else:
+                                print(f"⚠️  Connection dropped before train {train_number} departed — "
+                                      f"keeping last_scheduled_ms so it can be re-selected.")
 
                     finally:
                         keepalive_task.cancel()
