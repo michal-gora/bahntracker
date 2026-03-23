@@ -166,15 +166,34 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
       - after Fasanenpark the model drives back to noname autonomously
       - we keep draining the WebSocket (required to prevent backpressure) until
         the HALL sensor fires and SM enters WAITING_AT_NONAME
+
+    Returns True if the train completed a full cycle (departed at least once).
+    Returns False if the cycle was aborted (restart requested or 90 s no-data timeout).
     """
     print(f"👁️  Watching for train {train_number}...\n")
+
+    NO_DATA_TIMEOUT = 90  # seconds — if selected train silent this long, re-select
 
     # Only exit when the SM has left WAITING_AT_NONAME and then returned to it.
     # Without this guard the check would fire immediately on the first message
     # (since the SM starts in WAITING_AT_NONAME), burning through all trains.
     departed = False
+    last_train_msg: float = time.time()  # wall-clock of last message FOR our train
+
+    sm.restart_event.clear()
 
     async for message in ws:
+        # Check for manual restart request from station display
+        if sm.restart_event.is_set():
+            print("🔄 Restart requested — aborting current tracking cycle")
+            sm.restart_event.clear()
+            return False
+
+        # Check no-data timeout (only while waiting for the train to appear)
+        if not departed and time.time() - last_train_msg > NO_DATA_TIMEOUT:
+            print(f"⏱️  No data from train {train_number} for {NO_DATA_TIMEOUT}s — soft-restarting")
+            return False
+
         try:
             data = json.loads(message)
             source = data.get("source", "")
@@ -186,10 +205,14 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
                     if not item:
                         continue
                     trajectory = item.get("content")
+                    if _is_our_train(trajectory, train_number):
+                        last_train_msg = time.time()
                     _process_train_update(trajectory, train_number, sm, scheduled_ms)
 
             elif source.startswith("trajectory"):
                 # Individual trajectory update
+                if _is_our_train(content, train_number):
+                    last_train_msg = time.time()
                 _process_train_update(content, train_number, sm, scheduled_ms)
 
         except json.JSONDecodeError:
@@ -207,6 +230,13 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
     # Return whether the train had at least departed — caller uses this to decide
     # whether to advance last_scheduled_ms.
     return departed
+
+
+def _is_our_train(data: dict, train_number: int) -> bool:
+    """Return True if this trajectory update belongs to the tracked train."""
+    if not isinstance(data, dict):
+        return False
+    return data.get("properties", {}).get("train_number") == train_number
 
 
 def _process_train_update(
@@ -381,7 +411,8 @@ async def main():
                             sm.eta_to_fasanenpark = int(estimated_ms / 1000)
                             sm.station.send_eta(sm.eta_to_fasanenpark)
 
-                            train_departed = await track_with_state_machine(ws, train_number, sm, scheduled_ms)
+                            train_departed = await track_with_state_machine(
+                                ws, train_number, sm, scheduled_ms)
                             if train_departed:
                                 # Normal completion (returned None via implicit return) or departed=True:
                                 # the train ran its full cycle, advance the cursor.

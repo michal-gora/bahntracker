@@ -15,6 +15,7 @@ States:
 
 import json
 import math
+import asyncio
 from enum import Enum, auto
 from datetime import datetime
 
@@ -33,9 +34,8 @@ class TrainStateMachine:
 
     TRACK_LOOP_SECONDS = 20.0   # Time for model to go one station at full speed (calibrate!)
     NONAME_TRAVEL_SECONDS = 20.0  # Time from Fasanenpark to noname (calibrate!)
-    MIN_SPEED = 0.35
+    MIN_SPEED = 0.5
     MAX_SPEED = 1.0
-
     def __init__(self, model_output, station_output, stations: list):
         """
         Args:
@@ -58,6 +58,10 @@ class TrainStateMachine:
         # Ensure the train is stopped at startup, then apply initial outputs.
         self.model.send_stop()
         self._apply_outputs()
+
+        # Event set by the station display (RESTART button) or the tracking loop
+        # (90 s no-data timeout) to abort the current tracking cycle and re-select a train.
+        self.restart_event: asyncio.Event = asyncio.Event()
 
     # ── Public API: feed events ─────────────────────────────────────────
 
@@ -350,7 +354,20 @@ class TrainStateMachine:
         return f" (ETA Fasanenpark: {datetime.fromtimestamp(self.eta_to_fasanenpark).strftime('%H:%M')})"
 
     def _gps_sync_station(self, coordinates: list, now: str):
-        """Re-sync current_station_index from GPS coordinates (called on BOARDING events)."""
+        """Re-sync current_station_index from GPS coordinates (called on BOARDING events).
+
+        If the GPS latitude is outside the Holzkirchen–Fasanenpark range the train
+        is not on our route — sets restart_event so the tracking loop drops it.
+        """
+        lat = coordinates[1]
+        _PADDING = 0.0045  # ~500 m in degrees latitude
+        route_lat_min = self.stations[0].get('lat', 0) - _PADDING
+        route_lat_max = self.stations[-1].get('lat', 0) + _PADDING
+        if not (route_lat_min <= lat <= route_lat_max):
+            print(f"[{now}] 🚨 GPS lat {lat:.5f} is outside route range "
+                  f"[{route_lat_min:.5f}, {route_lat_max:.5f}] — train off-route, requesting restart")
+            self.restart_event.set()
+            return
         idx = self._find_nearest_station(coordinates)
         if idx != self.current_station_index:
             old_name = self.stations[self.current_station_index]['name'] if self.current_station_index is not None else "?"

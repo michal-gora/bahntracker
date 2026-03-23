@@ -139,6 +139,9 @@ async def tcp_station_server(station_output: TcpStationOutput):
                         writer.write(b"PONG\n")
                         await writer.drain()
                         # Uncomment for debugging: print("📤 Sent PONG to station")
+                    elif msg == "RESTART":
+                        print("🔄 RESTART received from station display")
+                        state_machine.restart_event.set()
                     else:
                         print(f"⚠️  Unknown message from station display: {msg!r}")
                         

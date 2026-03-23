@@ -29,6 +29,10 @@ SERVER_PORT = 8081
 PING_INTERVAL = 10      # seconds - how often MCU sends PING
 PONG_TIMEOUT = 3        # seconds - if no PONG received, reconnect
 RECONNECT_DELAY = 5     # seconds - wait before reconnecting
+
+# Hardware
+RESTART_BUTTON_PIN = "P0_4"  # active-LOW button with internal pull-up; adjust pin as needed
+BUTTON_DEBOUNCE_MS = 300     # minimum ms between accepted presses
 # ============================================================
 
 
@@ -38,6 +42,10 @@ RECONNECT_DELAY = 5     # seconds - wait before reconnecting
 # ============================================================
 i2c = I2C(sda=Pin("P6_1"), scl=Pin("P6_0"))
 LCD = I2C_LCD1602(i2c)
+
+# Restart button (active-LOW, internal pull-up)
+restart_button = Pin(RESTART_BUTTON_PIN, Pin.IN, Pin.PULL_UP)
+_last_button_press_ms: int = 0  # debounce tracker
 
 def display_clear(arg: int = -1):
     """Clear the display."""
@@ -133,6 +141,18 @@ def start_socket_client():
 
         # Main communication loop — all timing via plain time.time() integer reads.
         try:
+            # Restart button check (active-LOW, debounced)
+            now_ms = time.ticks_ms()
+            if (restart_button.value() == 0
+                    and time.ticks_diff(now_ms, _last_button_press_ms) > BUTTON_DEBOUNCE_MS):
+                global _last_button_press_ms
+                _last_button_press_ms = now_ms
+                print("Button pressed — sending RESTART")
+                try:
+                    s.write(b"RESTART\n")
+                except OSError:
+                    pass  # will be caught below if socket is dead
+
             now = time.time()
             if now - last_ping_sent >= PING_INTERVAL:
                 try:
