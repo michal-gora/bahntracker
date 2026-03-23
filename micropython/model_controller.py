@@ -54,9 +54,11 @@ brake_step: float = 0.0          # PWM decrease per 10 ms tick during braking
 TRACTION_MIN: float = 0.2        # PWM below which the motor stalls; treated as zero
 LINEAR_ACCEL_STEP: float = 0.005 # PWM change per 10 ms tick for normal speed ramps
                                  # 0→1 in ~2 s; increase for snappier, decrease for smoother
+BRAKE_DEAD_ZONE: float = 0.27     # effective zero for braking physics; tune independently of
+                                 # TRACTION_MIN to equalise stopping distance across speeds.
+                                 # If slow speeds overshoot, raise this value (e.g. 0.27).
+                                 # brake_step = (v₀ - BRAKE_DEAD_ZONE)² * BRAKE_DECEL / 100
 BRAKE_DECEL: float = 1.0         # braking strength coefficient (dimensionless, server-tunable)
-                                 # brake_step = v₀² * BRAKE_DECEL / 100
-                                 # at v₀=0.5, BRAKE_DECEL=1.0 → ~1 s stop
                                  # higher = shorter braking distance, lower = longer
 
 is_led_on = True
@@ -131,7 +133,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed, braking, brake_step, BRAKE_DECEL
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed, braking, brake_step, BRAKE_DECEL, BRAKE_DEAD_ZONE
     
     s = None
     last_ping_sent: float = 0.0
@@ -195,11 +197,13 @@ def start_socket_client():
                     # train physically stops, not at the magnet trigger point.
                     if current_speed > 0.0:
                         braking = True
-                        # Use (v - TRACTION_MIN)² so the dead zone is excluded and
-                        # physical stopping distance stays constant across all speeds.
-                        effective = current_speed - TRACTION_MIN
+                        # Use (v - BRAKE_DEAD_ZONE)² so the calibrated effective-zero
+                        # is excluded, giving constant physical stopping distance.
+                        # BRAKE_DEAD_ZONE is tuned independently of TRACTION_MIN:
+                        # raise it if slow speeds overshoot, lower it if they stop early.
+                        effective = max(0.0, current_speed - BRAKE_DEAD_ZONE)
                         brake_step = effective ** 2 * BRAKE_DECEL / 100
-                        print(f"Braking: entry speed={current_speed:.3f}, effective={effective:.3f}, step={brake_step:.5f}/tick")
+                        print(f"Braking: entry={current_speed:.3f}, effective={effective:.3f}, step={brake_step:.5f}/tick")
                     else:
                         # Already stopped — notify server immediately
                         try:
@@ -352,6 +356,12 @@ def start_socket_client():
                         print(f"Brake decel set to {BRAKE_DECEL}")
                     except (IndexError, ValueError):
                         print("Invalid BRAKE_DECEL format")
+                elif line_str.startswith("BRAKE_DEAD_ZONE:"):
+                    try:
+                        BRAKE_DEAD_ZONE = float(line_str.split(":")[1])
+                        print(f"Brake dead zone set to {BRAKE_DEAD_ZONE}")
+                    except (IndexError, ValueError):
+                        print("Invalid BRAKE_DEAD_ZONE format")
                 else:
                     print(f"Unknown command: {line_str}")
                 # Ignore unknown messages silently (could be ACK or other server messages)
