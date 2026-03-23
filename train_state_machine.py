@@ -78,18 +78,6 @@ class TrainStateMachine:
         new_state = self._transition_on_api(new_api_state, coordinates)
         if new_state and new_state != old_state:
             self._enter_state(new_state, from_state=old_state, coordinates=coordinates)
-        elif self.state == State.WAITING_AT_NONAME and coordinates:
-            # No state transition, but real train is moving — update approaching station display.
-            # Uses latitude ordering: the S3 runs strictly south→north so the approaching
-            # station is simply the first one whose lat exceeds the train's current lat.
-            lat = coordinates[1]
-            idx = self._find_approaching_station(lat)
-            if idx != self.current_station_index:
-                self.current_station_index = idx
-                name = self.stations[idx]['name']
-                now = datetime.now().strftime('%H:%M:%S')
-                print(f"[{now}] 🔭 Approaching: {name} (idx {idx})")
-                self.station.send_station(name, State.WAITING_AT_NONAME.name)
 
     def on_hall_sensor(self):
         """Called when the model train's hall sensor triggers (arrived at a station)."""
@@ -117,6 +105,8 @@ class TrainStateMachine:
         if s == State.WAITING_AT_NONAME:
             if api_state == "BOARDING":
                 return State.AT_STATION_VALID
+            elif api_state == "DRIVING":
+                return State.DRIVING
 
         elif s == State.AT_STATION_VALID:
             if api_state == "DRIVING":
@@ -185,16 +175,30 @@ class TrainStateMachine:
             # else: no GPS but not first boarding — trust existing counter
 
         elif new_state == State.DRIVING:
-            # Departing: increment index to point to our destination (next station)
-            if self.current_station_index is not None:
-                self.current_station_index += 1
-                if self.current_station_index >= len(self.stations):
-                    self.current_station_index = len(self.stations) - 1
-                    print(f"[{now}] ⚠️  Station index overflow, clamped to last station")
-            # Calculate speed from travel time
-            self.travel_speed = self._calculate_speed()
-            # TODO: derive loop count from travel_times.json or station config
-            self.model.send_loops(3)
+            if from_state == State.WAITING_AT_NONAME:
+                # Pre-start: real train is already driving, send the model from
+                # noname to the first HALL position so it's ready when the real
+                # train boards.  Station index comes from GPS (approaching station).
+                if coordinates:
+                    lat = coordinates[1]
+                    self.current_station_index = self._find_approaching_station(lat)
+                elif self.current_station_index is None:
+                    self.current_station_index = 0
+                self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
+                self.model.send_loops(0)
+                print(f"[{now}] 🚀 Pre-starting model from noname "
+                      f"(approaching {self.stations[self.current_station_index]['name']})")
+            else:
+                # Normal departure: increment index to point to our destination (next station)
+                if self.current_station_index is not None:
+                    self.current_station_index += 1
+                    if self.current_station_index >= len(self.stations):
+                        self.current_station_index = len(self.stations) - 1
+                        print(f"[{now}] ⚠️  Station index overflow, clamped to last station")
+                # Calculate speed from travel time
+                self.travel_speed = self._calculate_speed()
+                # TODO: derive loop count from travel_times.json or station config
+                self.model.send_loops(3)
 
         elif new_state == State.DRIVING_TO_NONAME:
             # Fixed speed for return to noname
