@@ -93,6 +93,11 @@ async def tcp_model_server(model_output: TcpModelOutput, state_machine):
 
             model_output.set_writer(writer)
 
+            # Replay current state machine outputs so the newly connected MCU
+            # receives the correct speed/loops immediately (e.g. if the train
+            # was already driving when the MCU reconnected).
+            state_machine._apply_outputs()
+
             # Read loop — model sends HALL / PING
             while True:
                 try:

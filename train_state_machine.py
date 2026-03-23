@@ -52,6 +52,7 @@ class TrainStateMachine:
         self.current_station_index: int | None = None
         self.last_api_state: str | None = None  # "BOARDING" or "DRIVING"
         self.travel_speed: float = 0.0
+        self.current_loops: int = 0           # last value sent via send_loops(); replayed on MCU reconnect
         self.eta_to_fasanenpark: int | None = None  # absolute unix timestamp of expected arrival at Fasanenpark
 
         # Ensure the train is stopped at startup, then apply initial outputs.
@@ -187,7 +188,7 @@ class TrainStateMachine:
                 self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
                 # Ignore hall sensor: model loops freely until real train boards,
                 # at which point RUNNING_TO_STATION entry sends loops=0 to "arm" the magnet.
-                self.model.send_loops(-1)
+                self.current_loops = -1
                 print(f"[{now}] 🚀 Pre-starting model from noname "
                       f"(approaching {self.stations[self.current_station_index]['name']})")
             else:
@@ -199,13 +200,13 @@ class TrainStateMachine:
                         print(f"[{now}] ⚠️  Station index overflow, clamped to last station")
                 # Calculate speed and matching loop count from travel time.
                 self.travel_speed = self._calculate_speed()
-                self.model.send_loops(self._calculate_loops())
+                self.current_loops = self._calculate_loops()
 
         elif new_state == State.DRIVING_TO_NONAME:
             # Fixed speed for return to noname
             self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
             # TODO: derive loop count from config
-            self.model.send_loops(0)
+            self.current_loops = 0
 
         elif new_state == State.RUNNING_TO_STATION:
             # Real train is boarding at the station the model is running toward.
@@ -215,7 +216,7 @@ class TrainStateMachine:
                 self._gps_sync_station(coordinates, now)
             # Arm the hall sensor: model stops at the next pass ("activate the magnet").
             # Also handles the pre-start case where the model was looping with loops=-1.
-            self.model.send_loops(0)
+            self.current_loops = 0
 
         elif new_state == State.WAITING_AT_NONAME:
             self.current_station_index = None
@@ -254,6 +255,7 @@ class TrainStateMachine:
             print(f"[{now}]   → Model: (already stopped by MCU) | Station: {name} ❌ (waiting){eta_str}")
 
         elif s == State.DRIVING:
+            self.model.send_loops(self.current_loops)
             self.model.send_speed(self.travel_speed)
             name = self._current_station_name()
             self.station.send_station(name, State.DRIVING.name)
@@ -261,11 +263,13 @@ class TrainStateMachine:
             print(f"[{now}]   → Model: SPEED:{self.travel_speed:.2f} | Station: → {name}{eta_str}")
 
         elif s == State.DRIVING_TO_NONAME:
+            self.model.send_loops(self.current_loops)
             self.model.send_speed(self.travel_speed)
             self.station.send_clear()
             print(f"[{now}]   → Model: SPEED:{self.travel_speed:.2f} | Station: clear (→ noname)")
 
         elif s == State.RUNNING_TO_STATION:
+            self.model.send_loops(self.current_loops)
             self.model.send_speed(self.MAX_SPEED)
             name = self._current_station_name()
             self.station.send_station(name, State.RUNNING_TO_STATION.name)
