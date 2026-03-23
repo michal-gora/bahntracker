@@ -47,7 +47,17 @@ hall_loops_remaining: int = 0         # runtime countdown, reset to hall_loop_co
 train_started_at: float = 0.0    # timestamp when train last started (speed > 0)
 current_speed: float = 0.0
 final_speed: float = 0.0
-RAMP_DISTANCE = 2.0  # tunable — larger = gentler ramp
+braking: bool = False            # True while hall-triggered deceleration is active
+brake_step: float = 0.0          # PWM decrease per 10 ms tick during braking
+
+# ── Tunable motion parameters ────────────────────────────────────────
+TRACTION_MIN: float = 0.2        # PWM below which the motor stalls; treated as zero
+LINEAR_ACCEL_STEP: float = 0.005 # PWM change per 10 ms tick for normal speed ramps
+                                 # 0→1 in ~2 s; increase for snappier, decrease for smoother
+BRAKE_DECEL: float = 1.0         # braking strength coefficient (dimensionless, server-tunable)
+                                 # brake_step = v₀² * BRAKE_DECEL / 100
+                                 # at v₀=0.5, BRAKE_DECEL=1.0 → ~1 s stop
+                                 # higher = shorter braking distance, lower = longer
 
 is_led_on = True
 led_pin = LED_PIN
@@ -68,26 +78,28 @@ def toggle_led():
     led.value(is_led_on)
     print(f"LED is now {'ON' if is_led_on else 'OFF'}")
     
-def set_speed(speed : float):
-    """
+def set_speed(speed: float):
+    """Set the target speed. The main loop ramps current_speed toward it linearly.
+    Cancels any active hall-triggered braking — a server command always takes priority.
+
     Args:
-        speed: [0, 1], sets the PWM between 0% and 100%
+        speed: [0, 1], where 1.0 = full PWM.
     """
-    global pwm, train_started_at, current_speed, final_speed, hall_loops_remaining, hall_loop_config
-    
-    # Clipping speed to [0, 1]
+    global pwm, train_started_at, current_speed, final_speed, hall_loops_remaining, hall_loop_config, braking
+
     speed = max(0., min(speed, 1.))
-    
-    # Track when train starts moving (transition from 0 to >0)
+
+    # Cancel hall-triggered braking if the server overrides the speed
+    braking = False
+
+    # Track transition from stopped to moving (reset watchdog timers)
     if current_speed == 0.0 and speed > 0.0:
         train_started_at = time.time()
         hall_loops_remaining = hall_loop_config
         print(f"Train started at {train_started_at}, loops set to {hall_loops_remaining}")
-    
+
     final_speed = speed
-    # pwm.duty_u16(int(speed * 65535.0)) # Immediately apply new speed
-    print(f"Set pwm duty cycle to {speed}")
-    return
+    print(f"Target speed set to {speed:.2f}")
     
 def set_reverser(reversed : bool):
     print("Set reverser to", reversed)
@@ -119,7 +131,7 @@ def hall_rise_interrupt(pin):
 
             
 def start_socket_client():
-    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed, RAMP_DISTANCE
+    global hall_triggered, hall_measuring, hall_loops_remaining, hall_loop_config, train_started_at, current_speed, final_speed, braking, brake_step, BRAKE_DECEL
     
     s = None
     last_ping_sent: float = 0.0
@@ -179,32 +191,59 @@ def start_socket_client():
                     # Infinite mode – ignore hall sensor
                     pass
                 elif hall_loops_remaining == 0:
-                    # Stop the train (hall_loops_remaining resets via set_speed() on next start)
-                    try:
-                        s.write(b"HALL\n")
-                        set_speed(0.0)
-                        print("Sent HALL – train stopped")
-                    except OSError as e:
-                        print(f"Failed to send HALL: {e}")
-                        raise
+                    # Begin hall-triggered braking. HALL is sent to the server once the
+                    # train physically stops, not at the magnet trigger point.
+                    if current_speed > 0.0:
+                        braking = True
+                        # Use (v - TRACTION_MIN)² so the dead zone is excluded and
+                        # physical stopping distance stays constant across all speeds.
+                        effective = current_speed - TRACTION_MIN
+                        brake_step = effective ** 2 * BRAKE_DECEL / 100
+                        print(f"Braking: entry speed={current_speed:.3f}, effective={effective:.3f}, step={brake_step:.5f}/tick")
+                    else:
+                        # Already stopped — notify server immediately
+                        try:
+                            s.write(b"HALL\n")
+                            print("Sent HALL – train already stopped")
+                        except OSError as e:
+                            print(f"Failed to send HALL: {e}")
+                            raise
                 else:
                     # More loops to go – apply cooldown and decrement
                     hall_loops_remaining -= 1
                     train_started_at = time.time()
                     print(f"Pass-through, cooldown reset, {hall_loops_remaining} loop(s) remaining")
             
-            # Acceleration and Speed Control Logic:
-            MIN_STEP = 0.001  # guarantees eventual arrival
-
-            speed_diff = final_speed - current_speed
-            if speed_diff != 0.0:
-                a = (final_speed**2 - current_speed**2) / (2 * RAMP_DISTANCE)
-                step = max(MIN_STEP, abs(a) * 0.01)
-                current_speed += max(-step, min(step, speed_diff))
-                if current_speed < 0.2:
-                    pwm.duty_u16(0)
-                else:
-                    pwm.duty_u16(int(current_speed * 65535.0))
+            # Speed control (runs every 10 ms)
+            if braking:
+                # Hall-triggered deceleration: quadratic profile → constant stopping distance
+                current_speed -= brake_step
+                if current_speed <= TRACTION_MIN:
+                    # Motor has stalled / below traction — train is stopped
+                    current_speed = 0.0
+                    final_speed = 0.0
+                    braking = False
+                    try:
+                        s.write(b"HALL\n")
+                        print("Sent HALL – train stopped after braking")
+                    except OSError as e:
+                        print(f"Failed to send HALL: {e}")
+                        raise
+                pwm.duty_u16(int(current_speed * 65535.0) if current_speed >= TRACTION_MIN else 0)
+            else:
+                # Normal speed ramp: linear acceleration / deceleration
+                speed_diff = final_speed - current_speed
+                if speed_diff > 0:
+                    current_speed = min(final_speed, current_speed + LINEAR_ACCEL_STEP)
+                    # Jump over the stall zone when starting from rest
+                    if 0 < current_speed < TRACTION_MIN:
+                        current_speed = TRACTION_MIN
+                elif speed_diff < 0:
+                    current_speed = max(final_speed, current_speed - LINEAR_ACCEL_STEP)
+                    if current_speed < TRACTION_MIN:
+                        current_speed = 0.0
+                        final_speed = 0.0  # snap to zero — motor can't run this slow
+                pwm.duty_u16(int(current_speed * 65535.0) if current_speed >= TRACTION_MIN else 0)
             
             
             # Watchdog: Check if we need to send PING
@@ -307,12 +346,12 @@ def start_socket_client():
                         print(f"Hall loop count set to {hall_loop_config}")
                     except (IndexError, ValueError):
                         print("Invalid LOOPS format")
-                elif line_str.startswith("RAMP_DISTANCE:"):
+                elif line_str.startswith("BRAKE_DECEL:"):
                     try:
-                        RAMP_DISTANCE = float(line_str.split(":")[1])
-                        print(f"Ramp distance set to {RAMP_DISTANCE}")
+                        BRAKE_DECEL = float(line_str.split(":")[1])
+                        print(f"Brake decel set to {BRAKE_DECEL}")
                     except (IndexError, ValueError):
-                        print("Invalid RAMP_DISTANCE format")
+                        print("Invalid BRAKE_DECEL format")
                 else:
                     print(f"Unknown command: {line_str}")
                 # Ignore unknown messages silently (could be ACK or other server messages)
