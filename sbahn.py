@@ -226,10 +226,10 @@ async def track_with_state_machine(ws, train_number: int, sm: TrainStateMachine,
         elif departed:
             return True  # full cycle complete
 
-    # WebSocket closed before the train completed its cycle.
-    # Return whether the train had at least departed — caller uses this to decide
-    # whether to advance last_scheduled_ms.
-    return departed
+    # WebSocket closed before the train completed its cycle — never advance
+    # last_scheduled_ms. The main loop will re-select the same in-progress train
+    # (it's designed for this: "pick_target_train will re-select it naturally").
+    return False
 
 
 def _is_our_train(data: dict, train_number: int) -> bool:
