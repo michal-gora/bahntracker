@@ -302,7 +302,15 @@ async def main():
     # These survive WebSocket reconnections
     stdin_task = asyncio.create_task(stdin_listener(sm))
     last_scheduled_ms: float = 0  # scheduled timestamp of the last tracked train
-    uic: int | None = None
+    # UIC for Fasanenpark is hardcoded in travel_times.json — read it directly
+    # rather than calling GET station over the WebSocket, which races with live
+    # BBOX messages and times out unreliably.
+    fasanenpark = next((s for s in stations if s["name"] == "Fasanenpark"), None)
+    if not fasanenpark or not fasanenpark.get("uic"):
+        print("❌ Fasanenpark not found in travel_times.json")
+        return
+    uic: str = fasanenpark["uic"]
+    print(f"📍 Fasanenpark UIC: {uic} (from travel_times.json)\n")
 
     try:
         while True:  # reconnection loop
@@ -312,12 +320,6 @@ async def main():
                     keepalive_task = asyncio.create_task(keep_alive(ws))
                     try:
                         await subscribe_bbox(ws)
-
-                        if uic is None:
-                            uic = await get_station_uic(ws, "Fasanenpark")
-                            if not uic:
-                                print("❌ Could not find Fasanenpark station")
-                                return
 
                         while True:  # main train loop
                             # On reconnect the SM may be mid-cycle.
