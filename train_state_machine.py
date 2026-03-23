@@ -31,8 +31,8 @@ class State(Enum):
 class TrainStateMachine:
     """ONE state machine that controls both model train and station display."""
 
-    TRACK_LOOP_SECONDS = 60.0   # Time for model to go one station at full speed (calibrate!)
-    NONAME_TRAVEL_SECONDS = 60.0  # Time from Fasanenpark to noname (calibrate!)
+    TRACK_LOOP_SECONDS = 20.0   # Time for model to go one station at full speed (calibrate!)
+    NONAME_TRAVEL_SECONDS = 20.0  # Time from Fasanenpark to noname (calibrate!)
     MIN_SPEED = 0.35
     MAX_SPEED = 1.0
 
@@ -185,7 +185,9 @@ class TrainStateMachine:
                 elif self.current_station_index is None:
                     self.current_station_index = 0
                 self.travel_speed = self._calculate_speed_for_time(self.NONAME_TRAVEL_SECONDS)
-                self.model.send_loops(0)
+                # Ignore hall sensor: model loops freely until real train boards,
+                # at which point RUNNING_TO_STATION entry sends loops=0 to "arm" the magnet.
+                self.model.send_loops(-1)
                 print(f"[{now}] 🚀 Pre-starting model from noname "
                       f"(approaching {self.stations[self.current_station_index]['name']})")
             else:
@@ -195,10 +197,9 @@ class TrainStateMachine:
                     if self.current_station_index >= len(self.stations):
                         self.current_station_index = len(self.stations) - 1
                         print(f"[{now}] ⚠️  Station index overflow, clamped to last station")
-                # Calculate speed from travel time
+                # Calculate speed and matching loop count from travel time.
                 self.travel_speed = self._calculate_speed()
-                # TODO: derive loop count from travel_times.json or station config
-                self.model.send_loops(3)
+                self.model.send_loops(self._calculate_loops())
 
         elif new_state == State.DRIVING_TO_NONAME:
             # Fixed speed for return to noname
@@ -212,7 +213,8 @@ class TrainStateMachine:
             # Re-sync from GPS in case we drifted — same logic as AT_STATION_VALID.
             if coordinates:
                 self._gps_sync_station(coordinates, now)
-            # TODO: derive loop count from config
+            # Arm the hall sensor: model stops at the next pass ("activate the magnet").
+            # Also handles the pre-start case where the model was looping with loops=-1.
             self.model.send_loops(0)
 
         elif new_state == State.WAITING_AT_NONAME:
@@ -310,6 +312,27 @@ class TrainStateMachine:
         if not travel_time or travel_time <= 0:
             return self.MIN_SPEED
         return self._calculate_speed_for_time(travel_time)
+
+    def _calculate_loops(self) -> int:
+        """Calculate how many extra hall-sensor passes to allow for the current segment.
+
+        Speed is set by _calculate_speed() to match travel_time for exactly 1 loop
+        when in the [MIN_SPEED, MAX_SPEED] range.  When speed is clamped (segment too
+        long for MIN_SPEED), the model would arrive far too early with 1 loop, so we
+        add extra loops until the total model time best approximates travel_time.
+
+        Examples (TRACK_LOOP_SECONDS=60, MIN_SPEED=0.35):
+          120 s segment → speed=0.50 → loop_time=120 s → 0 extra loops
+          360 s segment → speed clamped to 0.35 → loop_time≈171 s → round(360/171)-1 = 1 extra loop
+        """
+        if self.current_station_index is None or self.current_station_index <= 0:
+            return 0
+        prev_station = self.stations[self.current_station_index - 1]
+        travel_time = prev_station.get('travel_time_to_next')
+        if not travel_time or travel_time <= 0:
+            return 0
+        loop_time = self.TRACK_LOOP_SECONDS / self.travel_speed
+        return max(0, round(travel_time / loop_time) - 1)
 
     def _calculate_speed_for_time(self, seconds: float) -> float:
         """speed = TRACK_LOOP_SECONDS / travel_time, clamped to [MIN, MAX]."""
