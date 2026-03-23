@@ -54,7 +54,8 @@ class TrainStateMachine:
         self.travel_speed: float = 0.0
         self.eta_to_fasanenpark: int | None = None  # absolute unix timestamp of expected arrival at Fasanenpark
 
-        # Apply initial state outputs
+        # Ensure the train is stopped at startup, then apply initial outputs.
+        self.model.send_stop()
         self._apply_outputs()
 
     # ── Public API: feed events ─────────────────────────────────────────
@@ -231,23 +232,20 @@ class TrainStateMachine:
         now = datetime.now().strftime('%H:%M:%S')
 
         if s == State.WAITING_AT_NONAME:
-            self.model.send_stop()
             self.station.send_clear()
-            print(f"[{now}]   → Model: STOP | Station: clear (waiting for next train)")
+            print(f"[{now}]   → Model: (already stopped by MCU) | Station: clear (waiting for next train)")
 
         elif s == State.AT_STATION_VALID:
-            self.model.send_stop()
             name = self._current_station_name()
             self.station.send_station(name, State.AT_STATION_VALID.name)
             eta_str = self._eta_str()
-            print(f"[{now}]   → Model: STOP | Station: {name} ✅{eta_str}")
+            print(f"[{now}]   → Model: (already stopped by MCU) | Station: {name} ✅{eta_str}")
 
         elif s == State.AT_STATION_WAITING:
-            self.model.send_stop()
             name = self._current_station_name()
             self.station.send_station(name, State.AT_STATION_WAITING.name)
             eta_str = self._eta_str()
-            print(f"[{now}]   → Model: STOP | Station: {name} ❌ (waiting){eta_str}")
+            print(f"[{now}]   → Model: (already stopped by MCU) | Station: {name} ❌ (waiting){eta_str}")
 
         elif s == State.DRIVING:
             self.model.send_speed(self.travel_speed)
