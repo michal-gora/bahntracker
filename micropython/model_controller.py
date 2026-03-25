@@ -54,7 +54,7 @@ brake_step: float = 0.0          # PWM decrease per 10 ms tick during braking
 TRACTION_MIN: float = 0.2        # PWM below which the motor stalls; treated as zero
 LINEAR_ACCEL_STEP: float = 0.005 # PWM change per 10 ms tick for normal speed ramps
                                  # 0→1 in ~2 s; increase for snappier, decrease for smoother
-BRAKE_DEAD_ZONE: float = 0.13     # effective zero for braking physics; tune independently of
+BRAKE_DEAD_ZONE: float = 0.13    # effective zero for braking physics; tune independently of
                                  # TRACTION_MIN to equalise stopping distance across speeds.
                                  # If slow speeds overshoot, raise this value (e.g. 0.27).
                                  # brake_step = (v₀ - BRAKE_DEAD_ZONE)² * BRAKE_DECEL / 100
