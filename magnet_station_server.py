@@ -518,13 +518,11 @@ async def main():
                                 last_scheduled_ms = scheduled_ms
                                 print(f"\n✅ Train {train_number} cycle complete. Model at magnet {model_magnet}.")
 
-                                # After a full cycle the model is at Fasanenpark (home).
-                                # It stays there waiting for the next train.
-                                # Reset model to home for the next cycle.
-                                model.send_speed(0.0)
+                                # The model was commanded LOOPS:0 + SPEED:0.60 toward Fasanenpark
+                                # and will stop there automatically when the hall magnet fires.
                                 model_magnet = home_magnet
                                 model_magnet_ref[0] = model_magnet  # keep ref in sync
-                                print(f"   Model reset to home (magnet {home_magnet}, {MAGNET_STATIONS[home_magnet]})")
+                                print(f"   Model heading to home (magnet {home_magnet}, {MAGNET_STATIONS[home_magnet]})")
                             else:
                                 print(f"⚠️  Tracking aborted for train {train_number} — will retry")
 
