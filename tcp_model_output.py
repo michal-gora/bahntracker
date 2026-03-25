@@ -62,6 +62,12 @@ class TcpModelOutput(ModelOutput):
     def send_loops(self, count: int):
         self._do_send(f"LOOPS:{count}\n")
 
+    def send_brake_decel(self, value: float):
+        self._do_send(f"BRAKE_DECEL:{value}\n")
+
+    def send_brake_dead_zone(self, value: float):
+        self._do_send(f"BRAKE_DEAD_ZONE:{value}\n")
+
 
 async def tcp_model_server(model_output: TcpModelOutput, state_machine):
     """

@@ -54,6 +54,11 @@ MAGNET_STATIONS = ["Deisenhofen", "Furth", "Taufkirchen", "Unterhaching", "Fasan
 # Constant speed for moving between magnets (PWM fraction 0–1)
 DRIVE_SPEED = 0.60
 
+# Brake tuning — sent to the model on every connect.
+# Magnet distances are short, so we want stronger braking than the MCU default (0.88).
+BRAKE_DECEL = 1.5       # braking strength coefficient (MCU default: 0.88)
+BRAKE_DEAD_ZONE = 0.13  # effective-zero threshold (keep at MCU default)
+
 # Timeout (seconds) — if selected train sends nothing for this long, re-select
 NO_DATA_TIMEOUT = 90
 
@@ -100,7 +105,12 @@ def find_station_by_coords(stations: list, coords: list[float]) -> str | None:
 
 # ── TCP server for model (simplified — no HALL processing) ──────────────
 
-async def model_tcp_server(model: TcpModelOutput, restart_event: asyncio.Event):
+async def model_tcp_server(
+    model: TcpModelOutput,
+    restart_event: asyncio.Event,
+    model_magnet_ref: list[int],
+    home_magnet_ref: list[int],
+):
     """TCP server for the model controller.  Handles HELLO/PING only (no HALL)."""
 
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -118,6 +128,26 @@ async def model_tcp_server(model: TcpModelOutput, restart_event: asyncio.Event):
             writer.write(b"ACK\n")
             await writer.drain()
             model.set_writer(writer)
+
+            # Send brake parameters immediately so they override the MCU defaults
+            # before the model starts moving.
+            model.send_brake_decel(BRAKE_DECEL)
+            model.send_brake_dead_zone(BRAKE_DEAD_ZONE)
+            print(f"📤 → Model: BRAKE_DECEL:{BRAKE_DECEL}, BRAKE_DEAD_ZONE:{BRAKE_DEAD_ZONE}")
+
+            # Assume the model just connected at Fasanenpark (home).
+            # If we already know it should be at a different magnet, drive it there now.
+            if model_magnet_ref[0] != home_magnet_ref[0]:
+                target = model_magnet_ref[0]
+                delta = (target - home_magnet_ref[0]) % len(MAGNET_STATIONS)
+                loops = delta - 1
+                print(f"🚀 Model reconnected at home; advancing to magnet {target} "
+                      f"({MAGNET_STATIONS[target]}): LOOPS:{loops}, SPEED:{DRIVE_SPEED}")
+                model.send_loops(loops)
+                model.send_speed(DRIVE_SPEED)
+            else:
+                print(f"🏠 Model connected at home (magnet {home_magnet_ref[0]}, "
+                      f"{MAGNET_STATIONS[home_magnet_ref[0]]}) — no repositioning needed")
 
             while True:
                 try:
@@ -404,17 +434,22 @@ async def main():
     station_out = TcpStationOutput()
     restart_event = asyncio.Event()
 
+    # Model starts at Fasanenpark (home) = last magnet
+    home_magnet = len(MAGNET_STATIONS) - 1
+    model_magnet = home_magnet
+
+    # Mutable refs so the model TCP server closure can read current positions
+    # even after model_magnet is reassigned in the tracking loop.
+    model_magnet_ref = [model_magnet]
+    home_magnet_ref = [home_magnet]
+
     # Start TCP servers
-    await model_tcp_server(model, restart_event)
+    await model_tcp_server(model, restart_event, model_magnet_ref, home_magnet_ref)
     await station_tcp_server(station_out, restart_event)
     print()
 
     # Static station display: always show "Fasanenpark"
     station_out.send_station("Fasanenpark", "AT_STATION_VALID")
-
-    # Model starts at Fasanenpark (home) = last magnet
-    home_magnet = len(MAGNET_STATIONS) - 1
-    model_magnet = home_magnet
 
     def status_fn():
         return (f"Model at magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]}), "
@@ -476,6 +511,7 @@ async def main():
                                 station_to_magnet, model, station_out,
                                 restart_event, model_magnet,
                             )
+                            model_magnet_ref[0] = model_magnet  # keep ref in sync
 
                             if departed:
                                 last_scheduled_ms = scheduled_ms
@@ -486,6 +522,7 @@ async def main():
                                 # Reset model to home for the next cycle.
                                 model.send_speed(0.0)
                                 model_magnet = home_magnet
+                                model_magnet_ref[0] = model_magnet  # keep ref in sync
                                 print(f"   Model reset to home (magnet {home_magnet}, {MAGNET_STATIONS[home_magnet]})")
                             else:
                                 print(f"⚠️  Tracking aborted for train {train_number} — will retry")
