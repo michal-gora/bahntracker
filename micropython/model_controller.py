@@ -34,7 +34,7 @@ HALL_PIN = "P9_0"
 # Noise spikes go HIGH before the main loop check and are cancelled by the
 # rising-edge IRQ.
 HALL_MIN_LOW_MS = 5    # ms – pin must stay LOW this long to confirm a trigger
-HALL_STARTUP_DELAY = 3  # seconds - ignore hall triggers after train starts / after each pass-through
+HALL_STARTUP_DELAY = 1  # seconds - ignore hall triggers after train starts / after each pass-through
 # ============================================================
 
 # Global state
