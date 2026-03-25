@@ -326,7 +326,7 @@ async def main():
 
     # Start TCP servers
     tcp_server = await tcp_model_server(model, sm)
-    await tcp_station_server(station)
+    await tcp_station_server(station, sm.restart_event)
     print()
 
     # These survive WebSocket reconnections

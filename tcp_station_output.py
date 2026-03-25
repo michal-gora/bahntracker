@@ -13,6 +13,7 @@ Protocol:
 import asyncio
 from outputs import StationOutput
 
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -87,7 +88,7 @@ class TcpStationOutput(StationOutput):
         print(f"📤 → Station: clear")
 
 
-async def tcp_station_server(station_output: TcpStationOutput):
+async def tcp_station_server(station_output: TcpStationOutput, restart_event: asyncio.Event | None = None):
     """
     TCP server that accepts ONE station display connection at a time.
     The station sends newline-terminated commands; we send newline-terminated replies.
@@ -141,7 +142,10 @@ async def tcp_station_server(station_output: TcpStationOutput):
                         # Uncomment for debugging: print("📤 Sent PONG to station")
                     elif msg == "RESTART":
                         print("🔄 RESTART received from station display")
-                        state_machine.restart_event.set()
+                        if restart_event is not None:
+                            restart_event.set()
+                        else:
+                            print("⚠️  RESTART received but no restart_event configured")
                     else:
                         print(f"⚠️  Unknown message from station display: {msg!r}")
                         
