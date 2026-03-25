@@ -103,15 +103,16 @@ def find_station_by_coords(stations: list, coords: list[float]) -> str | None:
     return best_name
 
 
-# ── TCP server for model (simplified — no HALL processing) ──────────────
+# ── TCP server for model ───────────────────────────────────────────────
 
 async def model_tcp_server(
     model: TcpModelOutput,
     restart_event: asyncio.Event,
-    model_magnet_ref: list[int],
-    home_magnet_ref: list[int],
+    confirmed_ref: list[int],
+    commanded_ref: list[int],
+    hall_event: asyncio.Event,
 ):
-    """TCP server for the model controller.  Handles HELLO/PING only (no HALL)."""
+    """TCP server for the model controller.  Handles HELLO/PING/HALL."""
 
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info("peername")
@@ -129,25 +130,22 @@ async def model_tcp_server(
             await writer.drain()
             model.set_writer(writer)
 
-            # Send brake parameters immediately so they override the MCU defaults
-            # before the model starts moving.
+            # Send brake parameters immediately so they override the MCU defaults.
             model.send_brake_decel(BRAKE_DECEL)
             model.send_brake_dead_zone(BRAKE_DEAD_ZONE)
             print(f"📤 → Model: BRAKE_DECEL:{BRAKE_DECEL}, BRAKE_DEAD_ZONE:{BRAKE_DEAD_ZONE}")
 
-            # Assume the model just connected at Fasanenpark (home).
-            # If we already know it should be at a different magnet, drive it there now.
-            if model_magnet_ref[0] != home_magnet_ref[0]:
-                target = model_magnet_ref[0]
-                delta = (target - home_magnet_ref[0]) % len(MAGNET_STATIONS)
+            # If the model was moving when it disconnected, re-send the command.
+            if commanded_ref[0] != confirmed_ref[0]:
+                delta = (commanded_ref[0] - confirmed_ref[0]) % len(MAGNET_STATIONS)
                 loops = delta - 1
-                print(f"🚀 Model reconnected at home; advancing to magnet {target} "
-                      f"({MAGNET_STATIONS[target]}): LOOPS:{loops}, SPEED:{DRIVE_SPEED}")
+                print(f"🚀 Model reconnected; resuming move to magnet {commanded_ref[0]} "
+                      f"({MAGNET_STATIONS[commanded_ref[0]]}): LOOPS:{loops}, SPEED:{DRIVE_SPEED}")
                 model.send_loops(loops)
                 model.send_speed(DRIVE_SPEED)
             else:
-                print(f"🏠 Model connected at home (magnet {home_magnet_ref[0]}, "
-                      f"{MAGNET_STATIONS[home_magnet_ref[0]]}) — no repositioning needed")
+                print(f"🏠 Model connected at magnet {confirmed_ref[0]} "
+                      f"({MAGNET_STATIONS[confirmed_ref[0]]}) — stopped")
 
             while True:
                 try:
@@ -164,8 +162,9 @@ async def model_tcp_server(
                         writer.write(b"PONG\n")
                         await writer.drain()
                     elif msg == "HALL":
-                        # We don't use HALL in this mode, but acknowledge receipt
-                        print("🧲 HALL received (ignored in magnet-station mode)")
+                        now_str = datetime.now().strftime("%H:%M:%S")
+                        print(f"[{now_str}] 🧲 HALL received from model")
+                        hall_event.set()
                     elif msg:
                         print(f"⚠️  Unknown message from model: {msg!r}")
                 except asyncio.TimeoutError:
@@ -244,48 +243,39 @@ async def station_tcp_server(station: TcpStationOutput, restart_event: asyncio.E
     return server
 
 
-# ── Core tracking loop ──────────────────────────────────────────────────
+# ── Train tracker (API only — no model interaction) ───────────────────────
 
-async def track_magnet_mode(
+async def _track_one_train(
     ws,
     train_number: int,
     scheduled_ms: float,
     stations: list,
     station_to_magnet: dict[str, int],
-    model: TcpModelOutput,
     station_out: TcpStationOutput,
     restart_event: asyncio.Event,
-    model_magnet: int,
-) -> tuple[bool, int]:
+    target_ref: list[int],
+    target_changed: asyncio.Event,
+) -> bool:
     """
-    Track a real train and drive the model between magnets on BOARDING events.
-
-    Returns (departed: bool, model_magnet: int).
-      - departed=True  → train completed its journey (passed Fasanenpark)
-      - departed=False → aborted (restart / timeout / WS closed)
-      - model_magnet   → current magnet index of the model train
+    Watch one train until it boards at Fasanenpark (return True) or is
+    aborted (return False).  Updates target_ref[0] on every BOARDING event
+    and sets target_changed so the model positioner can react.
+    Never touches the model train.
     """
-    print(f"👁️  Watching for train {train_number} (magnet-station mode)...")
-    print(f"   Model currently at magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})\n")
-
-    departed = False
+    home_magnet = len(MAGNET_STATIONS) - 1
     last_train_msg = time.time()
     last_api_state: str | None = None
-    home_magnet = len(MAGNET_STATIONS) - 1  # Fasanenpark index
-
-    restart_event.clear()
+    departed = False
 
     async for message in ws:
-        # Manual restart?
         if restart_event.is_set():
-            print("🔄 Restart requested — aborting tracking")
             restart_event.clear()
-            return False, model_magnet
+            print("🔄 [Tracker] Restart")
+            return False
 
-        # No-data timeout (before first departure)
         if not departed and time.time() - last_train_msg > NO_DATA_TIMEOUT:
-            print(f"⏱️  No data from train {train_number} for {NO_DATA_TIMEOUT}s — soft-restart")
-            return False, model_magnet
+            print(f"⏱️  [Tracker] No data from train {train_number} for {NO_DATA_TIMEOUT}s")
+            return False
 
         try:
             data = json.loads(message)
@@ -322,71 +312,206 @@ async def track_magnet_mode(
                 delay_str = f" (delay: {delay / 1000:.0f}s)" if delay else " (on time)"
                 now_str = datetime.now().strftime("%H:%M:%S")
                 icon = "🚉" if new_state == "BOARDING" else "🚆"
-                print(f"\n[{now_str}] {icon} Real train: {new_state}{delay_str}")
+                print(f"\n[{now_str}] {icon} [Tracker] Train {train_number}: {new_state}{delay_str}")
 
-                # Update ETA to Fasanenpark on every state change
                 arrival_unix = int((scheduled_ms + delay) / 1000)
                 station_out.send_eta(arrival_unix)
 
                 if new_state == "BOARDING":
                     departed = True
 
-                    # Which station is the real train boarding at?
                     nearest = find_station_by_coords(stations, coordinates)
                     if nearest and nearest in station_to_magnet:
                         real_magnet = station_to_magnet[nearest]
                     elif nearest:
-                        # Station exists but isn't in our magnet set — ignore
-                        print(f"   📍 Real train at {nearest} — not in magnet range, ignoring")
+                        print(f"   📍 Train at {nearest} — not in magnet range, ignoring")
                         continue
                     else:
                         print(f"   📍 Could not determine station from coords {coordinates}")
                         continue
 
-                    print(f"   📍 Real train boarding at: {nearest} (magnet {real_magnet})")
-                    print(f"   🚂 Model currently at: magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
+                    print(f"   📍 Boarding at: {nearest} (magnet {real_magnet})")
 
-                    # Compute forward delta using modular arithmetic.
-                    # The model track is a loop: after Fasanenpark (index 4) the
-                    # model travels forward and reaches Deisenhofen (index 0) next,
-                    # so Deisenhofen is physically AHEAD even though 0 < 4 numerically.
-                    # Example: model at 4, real at 0 → (0-4) % 5 = 1 (one magnet forward) ✓
-                    num_stations = len(MAGNET_STATIONS)
-                    delta = (real_magnet - model_magnet) % num_stations
+                    if target_ref[0] != real_magnet:
+                        target_ref[0] = real_magnet
+                        target_changed.set()
+                        print(f"   🎯 Target → magnet {real_magnet} ({MAGNET_STATIONS[real_magnet]})")
+                    else:
+                        print(f"   🎯 Target unchanged (magnet {real_magnet})")
 
-                    if delta == 0:
-                        print(f"   ✅ Model already at correct magnet — no movement needed")
-                        continue
-
-                    loops_to_send = delta - 1  # LOOPS:0 = stop on next magnet (1 magnet ahead)
-                    print(f"   🚀 Advancing model by {delta} magnet(s): LOOPS:{loops_to_send}, SPEED:{DRIVE_SPEED}")
-
-                    model.send_loops(loops_to_send)
-                    model.send_speed(DRIVE_SPEED)
-                    model_magnet = real_magnet
-                    print(f"   📍 Model now heading to magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
-
-                    # As soon as the real train boards at Fasanenpark we're done —
-                    # no need to wait for it to depart.
                     if real_magnet == home_magnet:
-                        print(f"   🏁 Real train boarded at Fasanenpark — cycle complete")
-                        return True, model_magnet
+                        print(f"   🏁 Train at Fasanenpark — cycle complete, searching next train")
+                        return True
 
                 elif new_state == "DRIVING" and departed:
-                    # Real train departed a station — just log it
                     if coordinates:
                         nearest = find_station_by_coords(stations, coordinates)
                         if nearest:
-                            print(f"   📍 Real train departed from: {nearest}")
+                            print(f"   📍 Departed from: {nearest}")
 
         except json.JSONDecodeError:
             pass
         except Exception as e:
-            print(f"❌ Error processing update: {e}")
+            print(f"❌ [Tracker] Error: {e}")
             traceback.print_exc()
 
-    # WebSocket closed before completion
-    return False, model_magnet
+    return False
+
+
+async def train_tracker_loop(
+    stations: list,
+    station_to_magnet: dict[str, int],
+    station_out: TcpStationOutput,
+    restart_event: asyncio.Event,
+    target_ref: list[int],
+    target_changed: asyncio.Event,
+):
+    """
+    Continuously selects and tracks real S-Bahn trains.  On each BOARDING
+    event, updates target_ref[0] and sets target_changed.  Completely
+    independent of the model train.
+    """
+    fasanenpark = next(s for s in stations if s["name"] == "Fasanenpark")
+    uic: str = fasanenpark["uic"]
+    print(f"📍 [Tracker] Fasanenpark UIC: {uic}")
+    last_scheduled_ms: float = 0
+
+    while True:  # reconnection loop
+        try:
+            async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
+                print("🔌 [Tracker] Connected to geops.io WebSocket")
+                keepalive = asyncio.create_task(keep_alive(ws))
+                try:
+                    await subscribe_bbox(ws)
+
+                    while True:  # train selection loop
+                        trains = await get_incoming_trains(ws, uic)
+                        if not trains:
+                            print("❌ [Tracker] No trains found, retrying in 30s...")
+                            await asyncio.sleep(30)
+                            continue
+
+                        print(f"\n📋 Timetable ({len(trains)} trains):")
+                        for t in trains:
+                            marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
+                            skip = " (skipping)" if t["timestamp"] <= last_scheduled_ms else ""
+                            print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
+
+                        train_number = pick_target_train(trains, exclude_before_ms=last_scheduled_ms)
+                        if not train_number:
+                            print("⏳ [Tracker] No suitable train in next 30 min, retrying in 60s...")
+                            await asyncio.sleep(60)
+                            continue
+
+                        scheduled_ms = next(t["timestamp"] for t in trains if t["number"] == train_number)
+                        estimated_ms = next(t["estimated_ms"] for t in trains if t["number"] == train_number)
+
+                        print(f"\n{'='*60}")
+                        print(f"  [Tracker] TRACKING TRAIN {train_number}")
+                        print(f"  Target currently: magnet {target_ref[0]} ({MAGNET_STATIONS[target_ref[0]]})")
+                        print(f"{'='*60}\n")
+
+                        station_out.send_eta(int(estimated_ms / 1000))
+
+                        completed = await _track_one_train(
+                            ws, train_number, scheduled_ms, stations,
+                            station_to_magnet, station_out, restart_event,
+                            target_ref, target_changed,
+                        )
+
+                        if completed:
+                            last_scheduled_ms = scheduled_ms
+                            print(f"\n✅ [Tracker] Train {train_number} done — searching next")
+                        else:
+                            print(f"⚠️  [Tracker] Aborted train {train_number} — will retry")
+
+                finally:
+                    keepalive.cancel()
+                    try:
+                        await keepalive
+                    except asyncio.CancelledError:
+                        pass
+
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"\n🔌 [Tracker] WS closed ({e}). Reconnecting in 5s...")
+            await asyncio.sleep(5)
+        except websockets.exceptions.InvalidStatus as e:
+            print(f"\n🔌 [Tracker] WS rejected ({e}). Reconnecting in 10s...")
+            await asyncio.sleep(10)
+        except OSError as e:
+            print(f"\n🔌 [Tracker] Network error ({e}). Reconnecting in 10s...")
+            await asyncio.sleep(10)
+
+
+# ── Model positioner (HALL only — no API interaction) ──────────────────
+
+async def model_positioner_loop(
+    model: TcpModelOutput,
+    hall_event: asyncio.Event,
+    target_ref: list[int],
+    target_changed: asyncio.Event,
+    confirmed_ref: list[int],
+    commanded_ref: list[int],
+):
+    """
+    Keeps the model train positioned at target_ref[0].
+
+    Rules:
+    - When target changes AND model is stopped: send move command immediately.
+    - Once moving, do nothing until HALL confirms arrival.
+    - On HALL: update confirmed position. If target still differs, send move.
+    Never touches the WebSocket or train API.
+    """
+    n = len(MAGNET_STATIONS)
+
+    def try_move():
+        target = target_ref[0]
+        confirmed = confirmed_ref[0]
+        delta = (target - confirmed) % n
+        if delta == 0:
+            now_str = datetime.now().strftime("%H:%M:%S")
+            print(f"[{now_str}] ✅ [Model] Already at target magnet {confirmed} ({MAGNET_STATIONS[confirmed]})")
+            return
+        loops = delta - 1
+        model.send_loops(loops)
+        model.send_speed(DRIVE_SPEED)
+        commanded_ref[0] = target
+        now_str = datetime.now().strftime("%H:%M:%S")
+        print(f"[{now_str}] 🚀 [Model] Moving: magnet {confirmed} ({MAGNET_STATIONS[confirmed]})"
+              f" → {target} ({MAGNET_STATIONS[target]}), LOOPS:{loops}, SPEED:{DRIVE_SPEED}")
+
+    while True:
+        is_moving = commanded_ref[0] != confirmed_ref[0]
+
+        hall_task = asyncio.create_task(hall_event.wait())
+        target_task = asyncio.create_task(target_changed.wait())
+
+        await asyncio.wait({hall_task, target_task}, return_when=asyncio.FIRST_COMPLETED)
+
+        hall_fired = hall_event.is_set()
+        target_fired = target_changed.is_set()
+
+        hall_task.cancel()
+        target_task.cancel()
+        await asyncio.gather(hall_task, target_task, return_exceptions=True)
+
+        if hall_fired:
+            hall_event.clear()
+            target_changed.clear()  # consume any pending update; try_move reads fresh target
+            confirmed_ref[0] = commanded_ref[0]
+            now_str = datetime.now().strftime("%H:%M:%S")
+            print(f"\n[{now_str}] 🧲 [Model] HALL confirmed: magnet {confirmed_ref[0]}"
+                  f" ({MAGNET_STATIONS[confirmed_ref[0]]})")
+            try_move()
+        elif target_fired:
+            target_changed.clear()
+            if not is_moving:
+                try_move()
+            else:
+                target = target_ref[0]
+                now_str = datetime.now().strftime("%H:%M:%S")
+                print(f"[{now_str}] ⏳ [Model] Target → magnet {target}"
+                      f" ({MAGNET_STATIONS[target]}) — queued until HALL")
 
 
 # ── Stdin listener ──────────────────────────────────────────────────────
@@ -418,7 +543,6 @@ async def main():
     stations = load_stations()
     print(f"📋 Loaded {len(stations)} stations from travel_times.json")
 
-    # Build station→magnet mapping
     station_to_magnet = build_station_to_magnet(stations)
     print(f"\n🧲 Magnet-station mapping:")
     for name, idx in sorted(station_to_magnet.items(), key=lambda x: x[1]):
@@ -430,122 +554,51 @@ async def main():
             name.startswith(m) or m.startswith(name) for name in station_to_magnet)}
         print(f"⚠️  Warning: could not map all magnet stations. Missing: {missing}")
 
-    # Output interfaces
     model = TcpModelOutput()
     station_out = TcpStationOutput()
     restart_event = asyncio.Event()
+    hall_event = asyncio.Event()
+    target_changed = asyncio.Event()
 
-    # Model starts at Fasanenpark (home) = last magnet
     home_magnet = len(MAGNET_STATIONS) - 1
-    model_magnet = home_magnet
+    # Shared position state — mutable refs so closures see updates
+    target_ref    = [home_magnet]  # real train's current station (set by tracker)
+    confirmed_ref = [home_magnet]  # model's confirmed position   (set on HALL)
+    commanded_ref = [home_magnet]  # last commanded position       (set when move sent)
 
-    # Mutable refs so the model TCP server closure can read current positions
-    # even after model_magnet is reassigned in the tracking loop.
-    model_magnet_ref = [model_magnet]
-    home_magnet_ref = [home_magnet]
-
-    # Start TCP servers
-    await model_tcp_server(model, restart_event, model_magnet_ref, home_magnet_ref)
+    await model_tcp_server(model, restart_event, confirmed_ref, commanded_ref, hall_event)
     await station_tcp_server(station_out, restart_event)
     print()
 
-    # Static station display: always show "Fasanenpark"
     station_out.send_station("Fasanenpark", "AT_STATION_VALID")
 
     def status_fn():
-        return (f"Model at magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]}), "
-                f"home={MAGNET_STATIONS[home_magnet]}")
+        moving_str = (f"moving → magnet {commanded_ref[0]} ({MAGNET_STATIONS[commanded_ref[0]]})"
+                      if commanded_ref[0] != confirmed_ref[0] else "stopped")
+        return (f"Target: magnet {target_ref[0]} ({MAGNET_STATIONS[target_ref[0]]}), "
+                f"Confirmed: magnet {confirmed_ref[0]} ({MAGNET_STATIONS[confirmed_ref[0]]}), "
+                f"{moving_str}")
 
     stdin_task = asyncio.create_task(stdin_listener(restart_event, status_fn))
-    last_scheduled_ms: float = 0
-
-    # Get Fasanenpark UIC
-    fasanenpark = next((s for s in stations if s["name"] == "Fasanenpark"), None)
-    if not fasanenpark or not fasanenpark.get("uic"):
-        print("❌ Fasanenpark not found in travel_times.json")
-        return
-    uic: str = fasanenpark["uic"]
-    print(f"📍 Fasanenpark UIC: {uic}\n")
+    tracker_task = asyncio.create_task(train_tracker_loop(
+        stations, station_to_magnet, station_out, restart_event,
+        target_ref, target_changed,
+    ))
+    positioner_task = asyncio.create_task(model_positioner_loop(
+        model, hall_event, target_ref, target_changed, confirmed_ref, commanded_ref,
+    ))
 
     try:
-        while True:  # reconnection loop
-            try:
-                async with websockets.connect(WS_URL, max_size=10 * 1024 * 1024) as ws:
-                    print("🔌 Connected to geops.io WebSocket\n")
-                    keepalive_task = asyncio.create_task(keep_alive(ws))
-
-                    try:
-                        await subscribe_bbox(ws)
-
-                        while True:  # train selection loop
-                            trains = await get_incoming_trains(ws, uic)
-                            if not trains:
-                                print("❌ No trains found, retrying in 30s...")
-                                await asyncio.sleep(30)
-                                continue
-
-                            print(f"\n📋 Timetable ({len(trains)} trains):")
-                            for t in trains:
-                                marker = "→" if any(d in t["destination"] for d in TARGET_DESTINATIONS) else " "
-                                skip = " (skipping)" if t["timestamp"] <= last_scheduled_ms else ""
-                                print(f"   {marker} {t['number']} → {t['destination']} @ {t['time']}{skip}")
-
-                            train_number = pick_target_train(trains, exclude_before_ms=last_scheduled_ms)
-                            if not train_number:
-                                print("⏳ No suitable train in next 30 min, retrying in 60s...")
-                                await asyncio.sleep(60)
-                                continue
-
-                            print(f"\n{'='*60}")
-                            print(f"  TRACKING TRAIN {train_number} (magnet-station mode)")
-                            print(f"  Model at magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
-                            print(f"{'='*60}\n")
-
-                            scheduled_ms = next(t["timestamp"] for t in trains if t["number"] == train_number)
-                            estimated_ms = next(t["estimated_ms"] for t in trains if t["number"] == train_number)
-
-                            # Send initial ETA
-                            station_out.send_eta(int(estimated_ms / 1000))
-
-                            departed, model_magnet = await track_magnet_mode(
-                                ws, train_number, scheduled_ms, stations,
-                                station_to_magnet, model, station_out,
-                                restart_event, model_magnet,
-                            )
-                            model_magnet_ref[0] = model_magnet  # keep ref in sync
-
-                            if departed:
-                                last_scheduled_ms = scheduled_ms
-                                print(f"\n✅ Train {train_number} cycle complete. Model at magnet {model_magnet}.")
-
-                                # The model was commanded LOOPS:0 + SPEED:0.60 toward Fasanenpark
-                                # and will stop there automatically when the hall magnet fires.
-                                model_magnet = home_magnet
-                                model_magnet_ref[0] = model_magnet  # keep ref in sync
-                                print(f"   Model heading to home (magnet {home_magnet}, {MAGNET_STATIONS[home_magnet]})")
-                            else:
-                                print(f"⚠️  Tracking aborted for train {train_number} — will retry")
-
-                    finally:
-                        keepalive_task.cancel()
-                        try:
-                            await keepalive_task
-                        except asyncio.CancelledError:
-                            pass
-
-            except websockets.exceptions.ConnectionClosed as e:
-                print(f"\n🔌 WebSocket closed ({e}). Reconnecting in 5s...")
-                await asyncio.sleep(5)
-            except OSError as e:
-                print(f"\n🔌 Network error ({e}). Reconnecting in 10s...")
-                await asyncio.sleep(10)
-
+        await asyncio.gather(stdin_task, tracker_task, positioner_task)
     except KeyboardInterrupt:
         print("\n👋 Stopped by user")
     finally:
-        stdin_task.cancel()
+        for task in (stdin_task, tracker_task, positioner_task):
+            task.cancel()
+        await asyncio.gather(stdin_task, tracker_task, positioner_task, return_exceptions=True)
 
-    print(f"\n📊 Final: model at magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
+    moving_str = (f"moving → {commanded_ref[0]}" if commanded_ref[0] != confirmed_ref[0] else "stopped")
+    print(f"\n📊 Final: target={target_ref[0]}, confirmed={confirmed_ref[0]}, {moving_str}")
 
 
 if __name__ == "__main__":
