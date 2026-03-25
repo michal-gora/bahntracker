@@ -56,7 +56,7 @@ DRIVE_SPEED = 0.60
 
 # Brake tuning — sent to the model on every connect.
 # Magnet distances are short, so we want stronger braking than the MCU default (0.88).
-BRAKE_DECEL = 1.5       # braking strength coefficient (MCU default: 0.88)
+BRAKE_DECEL = 3.0       # braking strength coefficient (MCU default: 0.88)
 BRAKE_DEAD_ZONE = 0.13  # effective-zero threshold (keep at MCU default)
 
 # Timeout (seconds) — if selected train sends nothing for this long, re-select
