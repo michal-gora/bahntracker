@@ -316,19 +316,18 @@ async def track_magnet_mode(
                     print(f"   📍 Real train boarding at: {nearest} (magnet {real_magnet})")
                     print(f"   🚂 Model currently at: magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
 
-                    if real_magnet == model_magnet:
+                    # Compute forward delta using modular arithmetic.
+                    # The model track is a loop: after Fasanenpark (index 4) the
+                    # model travels forward and reaches Deisenhofen (index 0) next,
+                    # so Deisenhofen is physically AHEAD even though 0 < 4 numerically.
+                    # Example: model at 4, real at 0 → (0-4) % 5 = 1 (one magnet forward) ✓
+                    num_stations = len(MAGNET_STATIONS)
+                    delta = (real_magnet - model_magnet) % num_stations
+
+                    if delta == 0:
                         print(f"   ✅ Model already at correct magnet — no movement needed")
                         continue
 
-                    if real_magnet < model_magnet:
-                        # Real train hasn't reached the model's position yet.
-                        # This shouldn't normally happen (train moves forward), but
-                        # could occur on GPS glitch.  Don't move backward.
-                        print(f"   ⚠️  Real train behind model (magnet {real_magnet} < {model_magnet}) — not moving backward")
-                        continue
-
-                    # Move model forward: pass through (real_magnet - model_magnet) magnets
-                    delta = real_magnet - model_magnet
                     loops_to_send = delta - 1  # LOOPS:0 = stop on next magnet (1 magnet ahead)
                     print(f"   🚀 Advancing model by {delta} magnet(s): LOOPS:{loops_to_send}, SPEED:{DRIVE_SPEED}")
 
