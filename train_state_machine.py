@@ -101,6 +101,16 @@ class TrainStateMachine:
         if self.state != State.DRIVING_TO_NONAME:
             self._enter_state(State.DRIVING_TO_NONAME, from_state=self.state)
 
+    def force_waiting_at_noname(self):
+        """Force transition to WAITING_AT_NONAME.
+
+        Use as an escape hatch when the model is stuck in DRIVING_TO_NONAME
+        indefinitely (e.g. model disconnected and HALL never fires). Resets all
+        tracking state so the next train can be picked normally.
+        """
+        if self.state != State.WAITING_AT_NONAME:
+            self._enter_state(State.WAITING_AT_NONAME, from_state=self.state)
+
     # ── Transition logic ────────────────────────────────────────────────
 
     def _transition_on_api(self, api_state: str, coordinates: list | None) -> State | None:

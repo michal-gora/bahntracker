@@ -375,8 +375,15 @@ async def main():
 
                             if sm.state == State.DRIVING_TO_NONAME:
                                 print("⏳ Model returning to noname — draining WebSocket until HALL fires...")
+                                _NONAME_TIMEOUT = 300  # seconds — max time to wait for HALL on return journey
+                                _drain_start = time.time()
                                 async for message in ws:
                                     if sm.state == State.WAITING_AT_NONAME:
+                                        break
+                                    if time.time() - _drain_start > _NONAME_TIMEOUT:
+                                        print(f"⚠️  HALL not received after {_NONAME_TIMEOUT}s "
+                                              f"— forcing WAITING_AT_NONAME to unblock")
+                                        sm.force_waiting_at_noname()
                                         break
                                 continue  # proceed to pick next train normally
 
