@@ -366,17 +366,18 @@ async def track_magnet_mode(
                     model_magnet = real_magnet
                     print(f"   📍 Model now heading to magnet {model_magnet} ({MAGNET_STATIONS[model_magnet]})")
 
+                    # As soon as the real train boards at Fasanenpark we're done —
+                    # no need to wait for it to depart.
+                    if real_magnet == home_magnet:
+                        print(f"   🏁 Real train boarded at Fasanenpark — cycle complete")
+                        return True, model_magnet
+
                 elif new_state == "DRIVING" and departed:
                     # Real train departed a station — just log it
                     if coordinates:
                         nearest = find_station_by_coords(stations, coordinates)
                         if nearest:
                             print(f"   📍 Real train departed from: {nearest}")
-
-                    # If the real train just departed Fasanenpark, we're done
-                    if model_magnet == home_magnet:
-                        print(f"   🏁 Real train past Fasanenpark — cycle complete")
-                        return True, model_magnet
 
         except json.JSONDecodeError:
             pass
